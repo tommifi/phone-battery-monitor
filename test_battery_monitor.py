@@ -56,3 +56,93 @@ def test_systemd_service_file_validity() -> None:
     assert "[Service]" in content
     assert "ExecStart=" in content
     assert "Restart=always" in content
+
+
+# ---------------------------------------------------------------------------
+# Charge control tests
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_thresholds_raise() -> None:
+    """Stop level must be greater than resume level."""
+    with pytest.raises(ValueError):
+        BatteryMonitor(stop_level=40, resume_level=80)
+
+
+def test_charge_stops_at_stop_level(monitor: BatteryMonitor) -> None:
+    """The port is switched off when the level reaches the stop level."""
+    with patch.object(monitor, "set_charging") as mock_set:
+        monitor._update_charge_state(80)
+        mock_set.assert_called_once_with(False)
+
+
+def test_hysteresis_no_change_between_levels(monitor: BatteryMonitor) -> None:
+    """Between resume and stop level nothing changes, in either state."""
+    with patch.object(monitor, "set_charging") as mock_set:
+        monitor.charging_enabled = True
+        monitor._update_charge_state(60)
+        monitor.charging_enabled = False
+        monitor._update_charge_state(60)
+        mock_set.assert_not_called()
+
+
+def test_charge_resumes_at_resume_level(monitor: BatteryMonitor) -> None:
+    """The port is switched on when the level drops to the resume level."""
+    monitor.charging_enabled = False
+    with patch.object(monitor, "set_charging") as mock_set:
+        monitor._update_charge_state(40)
+        mock_set.assert_called_once_with(True)
+
+
+def test_critical_level_forces_resume() -> None:
+    """A resume level below the critical level is raised to the critical one."""
+    mon = BatteryMonitor(stop_level=80, resume_level=5)
+    mon.charging_enabled = False
+    with patch.object(mon, "set_charging") as mock_set:
+        mon._update_charge_state(15)
+        mock_set.assert_called_once_with(True)
+
+
+def test_failsafe_after_repeated_read_failures(monitor: BatteryMonitor) -> None:
+    """Three failed reads with the port off switch the port back on."""
+    monitor.charging_enabled = False
+    with patch.object(monitor, "set_charging") as mock_set:
+        for _ in range(3):
+            monitor._handle_read_failure()
+        mock_set.assert_called_once_with(True)
+
+
+def test_no_failsafe_when_port_already_on(monitor: BatteryMonitor) -> None:
+    """Read failures do not toggle the port when it is already on."""
+    with patch.object(monitor, "set_charging") as mock_set:
+        for _ in range(5):
+            monitor._handle_read_failure()
+        mock_set.assert_not_called()
+
+
+def test_no_power_loss_check_when_port_off(monitor: BatteryMonitor) -> None:
+    """A port switched off by us is not reported as power loss."""
+    monitor.charging_enabled = False
+    with patch.object(monitor, "stop_heavy_services") as mock_stop:
+        monitor._check_power_loss(70)
+        mock_stop.assert_not_called()
+
+
+def test_grace_period_after_resume(monitor: BatteryMonitor) -> None:
+    """Power loss is ignored during the grace cycles after switching on."""
+    monitor.grace_cycles = 2
+    with patch.object(monitor, "is_ac_or_usb_powered", return_value=False), patch.object(
+        monitor, "stop_heavy_services"
+    ) as mock_stop:
+        monitor._check_power_loss(50)
+        monitor._check_power_loss(50)
+        mock_stop.assert_not_called()
+        monitor._check_power_loss(50)
+        mock_stop.assert_called_once()
+
+
+def test_set_charging_failure_keeps_state(monitor: BatteryMonitor) -> None:
+    """A failed uhubctl call does not change the tracked state."""
+    with patch("battery_monitor.subprocess.run", side_effect=OSError("boom")):
+        assert monitor.set_charging(False) is False
+    assert monitor.charging_enabled is True
