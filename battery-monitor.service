@@ -6,6 +6,7 @@ After=network.target multi-user.target
 Type=simple
 ExecStart=/usr/bin/python3 /home/tommaso/repos/battery-monitor/battery_monitor.py
 WorkingDirectory=/home/tommaso/repos/battery-monitor
+EnvironmentFile=-%h/.config/portfolio-watch/env
 Restart=always
 RestartSec=10
 StandardOutput=journal

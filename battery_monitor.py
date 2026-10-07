@@ -59,6 +59,7 @@ CRITICAL_LEVEL = 15
 MAX_READ_FAILURES = 3
 GRACE_CYCLES = 2
 MAX_SWITCH_FAILURES = 3
+LOW_LEVEL_ALERT = 25
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 TG_TOKEN_ENV = "PORTFOLIO_WATCH_TG_TOKEN"
 TG_CHAT_ENV = "PORTFOLIO_WATCH_TG_CHAT_ID"
@@ -133,6 +134,7 @@ class BatteryMonitor:
         self.grace_cycles: int = 0
         self.switch_failures: int = 0
         self.alert_sent: bool = False
+        self.low_alert_sent: bool = False
 
     def _run_adb_cmd(self, args: list[str]) -> str | None:
         """Execute an ADB command on the configured device and return stdout.
@@ -240,6 +242,23 @@ class BatteryMonitor:
                 f"{self.switch_failures} times in a row. Check the journal."
             )
 
+    def _check_low_level(self, level: int) -> None:
+        """Send one alert per discharge cycle if the level is low with the port off.
+
+        Args:
+            level: Current battery level in percent.
+        """
+        if self.charging_enabled:
+            self.low_alert_sent = False
+            return
+        if level < LOW_LEVEL_ALERT and not self.low_alert_sent:
+            logger.error("Level %d%% with USB port off, sending alert.", level)
+            host = socket.gethostname()
+            self.low_alert_sent = send_telegram_message(
+                f"battery-monitor on {host}: phone at {level}% with USB port off. "
+                "Run: sudo uhubctl -l 1 -p 1 -a on"
+            )
+
     def _update_charge_state(self, level: int) -> None:
         """Apply the hysteresis rules to the charging port.
 
@@ -321,6 +340,7 @@ class BatteryMonitor:
                 self.read_failures = 0
                 logger.debug("Level: %d%%, charging: %s", level, self.charging_enabled)
                 self._update_charge_state(level)
+                self._check_low_level(level)
                 self._check_power_loss(level)
             time.sleep(self.check_interval)
 

@@ -179,3 +179,34 @@ def test_switch_success_resets_failures(monitor: BatteryMonitor) -> None:
         assert monitor.set_charging(False) is True
     assert monitor.switch_failures == 0
     assert monitor.alert_sent is False
+
+
+def test_low_level_alert_sent_once(monitor: BatteryMonitor) -> None:
+    """One alert is sent while the level stays low with the port off."""
+    monitor.charging_enabled = False
+    with patch("battery_monitor.send_telegram_message", return_value=True) as mock_tg:
+        for _ in range(3):
+            monitor._check_low_level(20)
+        mock_tg.assert_called_once()
+
+
+def test_low_level_no_alert_when_port_on(monitor: BatteryMonitor) -> None:
+    """No alert is sent while the port is on, even at a low level."""
+    with patch("battery_monitor.send_telegram_message") as mock_tg:
+        monitor._check_low_level(10)
+        mock_tg.assert_not_called()
+
+
+def test_low_level_no_alert_above_threshold(monitor: BatteryMonitor) -> None:
+    """No alert is sent above the threshold with the port off."""
+    monitor.charging_enabled = False
+    with patch("battery_monitor.send_telegram_message") as mock_tg:
+        monitor._check_low_level(30)
+        mock_tg.assert_not_called()
+
+
+def test_low_level_alert_flag_resets_when_port_on(monitor: BatteryMonitor) -> None:
+    """The alert flag is cleared once charging is enabled again."""
+    monitor.low_alert_sent = True
+    monitor._check_low_level(50)
+    assert monitor.low_alert_sent is False
