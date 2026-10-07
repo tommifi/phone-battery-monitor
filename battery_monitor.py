@@ -31,8 +31,13 @@ Safety
 """
 
 import logging
+import os
+import socket
 import subprocess
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 # Configure logging
@@ -53,6 +58,36 @@ CHARGE_RESUME_LEVEL = 40
 CRITICAL_LEVEL = 15
 MAX_READ_FAILURES = 3
 GRACE_CYCLES = 2
+MAX_SWITCH_FAILURES = 3
+TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+TG_TOKEN_ENV = "PORTFOLIO_WATCH_TG_TOKEN"
+TG_CHAT_ENV = "PORTFOLIO_WATCH_TG_CHAT_ID"
+
+
+def send_telegram_message(text: str) -> bool:
+    """Send a Telegram message using credentials from the environment.
+
+    Uses only the standard library, so it works with the system Python.
+
+    Args:
+        text: Message body to send.
+
+    Returns:
+        True if the message was sent, False otherwise.
+    """
+    token = os.environ.get(TG_TOKEN_ENV)
+    chat_id = os.environ.get(TG_CHAT_ENV)
+    if not token or not chat_id:
+        logger.error("Telegram credentials not set in environment; alert not sent.")
+        return False
+    url = TELEGRAM_API_URL.format(token=token)
+    data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+    try:
+        with urllib.request.urlopen(url, data=data, timeout=10):
+            return True
+    except (urllib.error.URLError, OSError) as err:
+        logger.error("Telegram alert failed: %s", type(err).__name__)
+        return False
 
 
 class BatteryMonitor:
@@ -96,6 +131,8 @@ class BatteryMonitor:
         self.charging_enabled: bool = True
         self.read_failures: int = 0
         self.grace_cycles: int = 0
+        self.switch_failures: int = 0
+        self.alert_sent: bool = False
 
     def _run_adb_cmd(self, args: list[str]) -> str | None:
         """Execute an ADB command on the configured device and return stdout.
@@ -168,14 +205,40 @@ class BatteryMonitor:
             "-l", HUB_LOCATION, "-p", HUB_PORT, "-a", action,
         ]
         try:
-            subprocess.run(cmd, capture_output=True, check=True, timeout=20)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as err:
-            logger.error("uhubctl %s failed: %s", action, err)
+            subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=20)
+        except subprocess.CalledProcessError as err:
+            logger.error(
+                "uhubctl %s failed (exit %d): %s",
+                action,
+                err.returncode,
+                (err.stderr or "").strip(),
+            )
+            self._register_switch_failure(action)
             return False
+        except (subprocess.TimeoutExpired, OSError) as err:
+            logger.error("uhubctl %s failed: %s", action, err)
+            self._register_switch_failure(action)
+            return False
+        self.switch_failures = 0
+        self.alert_sent = False
         self.charging_enabled = enabled
         self.grace_cycles = GRACE_CYCLES if enabled else 0
         logger.info("USB port power switched %s.", action)
         return True
+
+    def _register_switch_failure(self, action: str) -> None:
+        """Count a failed port switch and send one alert per failure streak.
+
+        Args:
+            action: The attempted action, "on" or "off".
+        """
+        self.switch_failures += 1
+        if self.switch_failures >= MAX_SWITCH_FAILURES and not self.alert_sent:
+            host = socket.gethostname()
+            self.alert_sent = send_telegram_message(
+                f"battery-monitor on {host}: uhubctl {action} failed "
+                f"{self.switch_failures} times in a row. Check the journal."
+            )
 
     def _update_charge_state(self, level: int) -> None:
         """Apply the hysteresis rules to the charging port.

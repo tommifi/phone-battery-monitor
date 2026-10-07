@@ -1,5 +1,6 @@
 """Unit tests for the battery_monitor module using pytest."""
 
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -146,3 +147,35 @@ def test_set_charging_failure_keeps_state(monitor: BatteryMonitor) -> None:
     with patch("battery_monitor.subprocess.run", side_effect=OSError("boom")):
         assert monitor.set_charging(False) is False
     assert monitor.charging_enabled is True
+
+
+def test_switch_failure_alert_sent_once(monitor: BatteryMonitor) -> None:
+    """One alert is sent after repeated failures, not one per attempt."""
+    err = subprocess.CalledProcessError(1, "sudo", stderr="a password is required")
+    with patch("battery_monitor.subprocess.run", side_effect=err), patch(
+        "battery_monitor.send_telegram_message", return_value=True
+    ) as mock_tg:
+        for _ in range(6):
+            assert monitor.set_charging(True) is False
+        mock_tg.assert_called_once()
+
+
+def test_alert_retried_if_telegram_fails(monitor: BatteryMonitor) -> None:
+    """If the alert could not be delivered, the next failure retries it."""
+    err = subprocess.CalledProcessError(1, "sudo", stderr="boom")
+    with patch("battery_monitor.subprocess.run", side_effect=err), patch(
+        "battery_monitor.send_telegram_message", return_value=False
+    ) as mock_tg:
+        for _ in range(5):
+            monitor.set_charging(True)
+        assert mock_tg.call_count == 3
+
+
+def test_switch_success_resets_failures(monitor: BatteryMonitor) -> None:
+    """A successful switch clears the failure counter and the alert flag."""
+    monitor.switch_failures = 2
+    monitor.alert_sent = True
+    with patch("battery_monitor.subprocess.run"):
+        assert monitor.set_charging(False) is True
+    assert monitor.switch_failures == 0
+    assert monitor.alert_sent is False
