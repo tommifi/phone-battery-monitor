@@ -1,9 +1,33 @@
-"""Module for monitoring Android device battery status and mitigating power drops.
+"""Android battery protection monitor for a phone attached to the Raspberry Pi.
 
-This module continuously checks the battery and charging status of a connected
-Android device via ADB. In the event of power loss or USB instability, it lowers
-system load by terminating resource-intensive automation services and dimming
-the display to preserve overall battery health in 24/7 deployments.
+Keeps the battery between CHARGE_RESUME_LEVEL and CHARGE_STOP_LEVEL by
+switching the phone's USB port power on and off with uhubctl (hub 1, port 1).
+The battery level is read over ADB via Wi-Fi, because USB data is lost while
+the port is off. It also reacts to real power loss by stopping heavy services
+and turning the screen off.
+
+How it is run
+-------------
+USER-level systemd service (not a system unit, not cron):
+
+    Unit file : ~/.config/systemd/user/battery-monitor.service
+    Commands  : systemctl --user status|restart battery-monitor.service
+    Logs      : journalctl --user -u battery-monitor.service -n 50 --no-pager
+
+Requirements
+------------
+- Linger enabled for the user (loginctl enable-linger).
+- ADB over Wi-Fi enabled on the phone (adb tcpip 5555). The mode is lost when
+  the phone reboots and must be re-enabled over USB.
+- Sudoers rule /etc/sudoers.d/uhubctl-phone allowing only
+  "uhubctl -l 1 -p 1 -a on|off" without password.
+
+Safety
+------
+- On start the port is switched on.
+- If the level cannot be read MAX_READ_FAILURES times in a row while the port
+  is off, the port is switched back on.
+- At or below CRITICAL_LEVEL the port is always switched on.
 """
 
 import logging
@@ -20,16 +44,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 MIN_SCREEN_BRIGHTNESS = 0
+DEFAULT_DEVICE = "192.168.100.115:5555"
+UHUBCTL_PATH = Path("/usr/sbin/uhubctl")
+HUB_LOCATION = "1"
+HUB_PORT = "1"
+CHARGE_STOP_LEVEL = 80
+CHARGE_RESUME_LEVEL = 40
+CRITICAL_LEVEL = 15
+MAX_READ_FAILURES = 3
+GRACE_CYCLES = 2
 
 
 class BatteryMonitor:
-    """Monitors device power status and applies mitigation strategies on disconnection."""
+    """Controls phone charging by port power and reacts to power loss."""
 
     def __init__(
         self,
         adb_path: Path = Path("/usr/bin/adb"),
         check_interval: int = 15,
         heavy_services: list[str] | None = None,
+        device: str = DEFAULT_DEVICE,
+        stop_level: int = CHARGE_STOP_LEVEL,
+        resume_level: int = CHARGE_RESUME_LEVEL,
     ) -> None:
         """Initialize the BatteryMonitor instance.
 
@@ -37,7 +73,15 @@ class BatteryMonitor:
             adb_path: Path to the adb executable.
             check_interval: Polling interval in seconds.
             heavy_services: List of Android process names to stop on power loss.
+            device: ADB serial of the phone (Wi-Fi address host:port).
+            stop_level: Battery level at which the USB port is switched off.
+            resume_level: Battery level at which the USB port is switched on.
+
+        Raises:
+            ValueError: If stop_level is not greater than resume_level.
         """
+        if stop_level <= resume_level:
+            raise ValueError("stop_level must be greater than resume_level")
         self.adb_path: Path = adb_path
         self.check_interval: int = check_interval
         self.heavy_services: list[str] = (
@@ -45,10 +89,16 @@ class BatteryMonitor:
             if heavy_services is not None
             else ["com.github.uiautomator", "atx-agent"]
         )
+        self.device: str = device
+        self.stop_level: int = stop_level
+        self.resume_level: int = resume_level
         self.is_power_connected: bool = True
+        self.charging_enabled: bool = True
+        self.read_failures: int = 0
+        self.grace_cycles: int = 0
 
     def _run_adb_cmd(self, args: list[str]) -> str | None:
-        """Execute an ADB command and return its stdout.
+        """Execute an ADB command on the configured device and return stdout.
 
         Args:
             args: Command line arguments to pass to ADB.
@@ -56,7 +106,7 @@ class BatteryMonitor:
         Returns:
             Decoded stdout string if successful, None otherwise.
         """
-        cmd = [str(self.adb_path)] + args
+        cmd = [str(self.adb_path), "-s", self.device] + args
         try:
             result = subprocess.run(
                 cmd,
@@ -103,6 +153,73 @@ class BatteryMonitor:
                     break
         return -1
 
+    def set_charging(self, enabled: bool) -> bool:
+        """Switch the phone's USB port power on or off with uhubctl.
+
+        Args:
+            enabled: True to power the port, False to cut it.
+
+        Returns:
+            True if the command succeeded, False otherwise.
+        """
+        action = "on" if enabled else "off"
+        cmd = [
+            "sudo", "-n", str(UHUBCTL_PATH),
+            "-l", HUB_LOCATION, "-p", HUB_PORT, "-a", action,
+        ]
+        try:
+            subprocess.run(cmd, capture_output=True, check=True, timeout=20)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as err:
+            logger.error("uhubctl %s failed: %s", action, err)
+            return False
+        self.charging_enabled = enabled
+        self.grace_cycles = GRACE_CYCLES if enabled else 0
+        logger.info("USB port power switched %s.", action)
+        return True
+
+    def _update_charge_state(self, level: int) -> None:
+        """Apply the hysteresis rules to the charging port.
+
+        Args:
+            level: Current battery level in percent.
+        """
+        resume = max(self.resume_level, CRITICAL_LEVEL)
+        if self.charging_enabled and level >= self.stop_level:
+            logger.info("Level %d%% reached, stopping charge.", level)
+            self.set_charging(False)
+        elif not self.charging_enabled and level <= resume:
+            logger.info("Level %d%% reached, resuming charge.", level)
+            self.set_charging(True)
+
+    def _handle_read_failure(self) -> None:
+        """Count a failed level read and force the port on if it persists."""
+        self.read_failures += 1
+        logger.warning("Battery level unreadable (%d).", self.read_failures)
+        if self.read_failures >= MAX_READ_FAILURES and not self.charging_enabled:
+            logger.error("Fail-safe: level unknown, switching port on.")
+            self.set_charging(True)
+
+    def _check_power_loss(self, level: int) -> None:
+        """Detect real power loss while the port is meant to be on.
+
+        Args:
+            level: Current battery level in percent, used for logging.
+        """
+        if not self.charging_enabled:
+            return
+        if self.grace_cycles > 0:
+            self.grace_cycles -= 1
+            return
+        powered = self.is_ac_or_usb_powered()
+        if not powered and self.is_power_connected:
+            logger.error("Power loss detected! Battery level: %d%%", level)
+            self.is_power_connected = False
+            self.stop_heavy_services()
+        elif powered and not self.is_power_connected:
+            logger.info("Power restored! Battery level: %d%%", level)
+            self.is_power_connected = True
+            self.restart_heavy_services()
+
     def _dim_display(self) -> None:
         """Set display brightness to minimum level via ADB."""
         logger.info("Setting screen brightness to minimum (%d).", MIN_SCREEN_BRIGHTNESS)
@@ -128,26 +245,20 @@ class BatteryMonitor:
             logger.info("Power stable. Ready to resume: %s", service)
 
     def monitor_loop(self) -> None:
-        """Run the main power monitoring loop indefinitely."""
+        """Run the main monitoring loop indefinitely."""
         logger.info("Starting 24/7 Battery Protection Monitor...")
+        self.set_charging(True)
+        self._dim_display()
 
         while True:
-            self._dim_display()
-            powered = self.is_ac_or_usb_powered()
             level = self.get_battery_level()
-
-            logger.debug("Current Status - Powered: %s, Level: %d%%", powered, level)
-
-            if not powered and self.is_power_connected:
-                logger.error("Power loss detected! Battery level: %d%%", level)
-                self.is_power_connected = False
-                self.stop_heavy_services()
-
-            elif powered and not self.is_power_connected:
-                logger.info("Power restored! Battery level: %d%%", level)
-                self.is_power_connected = True
-                self.restart_heavy_services()
-
+            if level < 0:
+                self._handle_read_failure()
+            else:
+                self.read_failures = 0
+                logger.debug("Level: %d%%, charging: %s", level, self.charging_enabled)
+                self._update_charge_state(level)
+                self._check_power_loss(level)
             time.sleep(self.check_interval)
 
 
