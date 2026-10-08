@@ -210,3 +210,88 @@ def test_low_level_alert_flag_resets_when_port_on(monitor: BatteryMonitor) -> No
     monitor.low_alert_sent = True
     monitor._check_low_level(50)
     assert monitor.low_alert_sent is False
+
+
+# ---------------------------------------------------------------------------
+# ADB over Wi-Fi recovery tests
+# ---------------------------------------------------------------------------
+
+DEVICES_BOTH = "List of devices attached\n192.168.100.115:5555\tdevice\n4a64b8f0\tdevice"
+
+
+def test_usb_serial_picks_usb_device(monitor: BatteryMonitor) -> None:
+    """The USB serial is returned when a ready USB device is listed."""
+    with patch.object(monitor, "_run_adb_global", return_value=DEVICES_BOTH):
+        assert monitor._usb_serial() == "4a64b8f0"
+
+
+def test_usb_serial_none_when_only_wifi(monitor: BatteryMonitor) -> None:
+    """A Wi-Fi entry is not a USB device."""
+    out = "List of devices attached\n192.168.100.115:5555\tdevice"
+    with patch.object(monitor, "_run_adb_global", return_value=out):
+        assert monitor._usb_serial() is None
+
+
+def test_usb_serial_ignores_offline_device(monitor: BatteryMonitor) -> None:
+    """A USB device that is not in the "device" state is ignored."""
+    out = "List of devices attached\n4a64b8f0\toffline"
+    with patch.object(monitor, "_run_adb_global", return_value=out):
+        assert monitor._usb_serial() is None
+
+
+def test_restore_wifi_adb_plain_reconnect(monitor: BatteryMonitor) -> None:
+    """If a plain reconnect works, tcpip is not used."""
+    with patch.object(monitor, "_run_adb_global") as mock_global, patch.object(
+        monitor, "_wifi_adb_reachable", return_value=True
+    ):
+        assert monitor._restore_wifi_adb() is True
+        mock_global.assert_called_once_with(["connect", monitor.device])
+
+
+def test_restore_wifi_adb_uses_tcpip_via_usb(monitor: BatteryMonitor) -> None:
+    """If the reconnect fails, tcpip is sent through the USB device."""
+    with patch.object(monitor, "_run_adb_global") as mock_global, patch.object(
+        monitor, "_wifi_adb_reachable", side_effect=[False, True]
+    ), patch.object(monitor, "_usb_serial", return_value="4a64b8f0"), patch(
+        "battery_monitor.time.sleep"
+    ):
+        assert monitor._restore_wifi_adb() is True
+        calls = [c.args[0] for c in mock_global.call_args_list]
+        assert ["-s", "4a64b8f0", "tcpip", "5555"] in calls
+
+
+def test_restore_wifi_adb_no_usb_device(monitor: BatteryMonitor) -> None:
+    """Without a USB device nothing more is tried."""
+    with patch.object(monitor, "_run_adb_global") as mock_global, patch.object(
+        monitor, "_wifi_adb_reachable", return_value=False
+    ), patch.object(monitor, "_usb_serial", return_value=None):
+        assert monitor._restore_wifi_adb() is False
+        mock_global.assert_called_once_with(["connect", monitor.device])
+
+
+def test_recover_skips_below_threshold(monitor: BatteryMonitor) -> None:
+    """No recovery attempt is made after a single failed read."""
+    monitor.read_failures = 1
+    with patch.object(monitor, "_restore_wifi_adb") as mock_restore:
+        monitor._recover_wifi_adb()
+        mock_restore.assert_not_called()
+
+
+def test_recover_runs_at_threshold(monitor: BatteryMonitor) -> None:
+    """Recovery is attempted once the failure threshold is reached."""
+    monitor.read_failures = 2
+    with patch.object(monitor, "_restore_wifi_adb") as mock_restore:
+        monitor._recover_wifi_adb()
+        mock_restore.assert_called_once()
+
+
+def test_adb_down_alert_sent_once(monitor: BatteryMonitor) -> None:
+    """One alert is sent while ADB over Wi-Fi stays down."""
+    monitor.read_failures = 10
+    with patch.object(monitor, "_restore_wifi_adb"), patch(
+        "battery_monitor.send_telegram_message", return_value=True
+    ) as mock_tg:
+        for _ in range(3):
+            monitor._recover_wifi_adb()
+        mock_tg.assert_called_once()
+    assert monitor.adb_alert_sent is True

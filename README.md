@@ -17,6 +17,7 @@ Keeps the battery of an Android phone, permanently attached to a Raspberry Pi, b
 - At or below 15% the port is always switched on.
 - If uhubctl fails 3 times in a row, one Telegram alert is sent.
 - If the level drops below 25% with the port off, one Telegram alert is sent per discharge cycle.
+- If the level stays unreadable for 10 cycles (ADB over Wi-Fi down), one Telegram alert is sent.
 
 ## Requirements
 
@@ -51,5 +52,5 @@ The last command restores power to the port manually.
 ## Known limitations
 
 - No root on the phone, so the charge limit is done from outside, by cutting the port power.
-- The ADB over Wi-Fi mode must be re-enabled over USB after a phone reboot.
+- The ADB over Wi-Fi mode is lost when the phone reboots; the monitor re-enables it through the USB connection (adb tcpip) once the port is powered.
 - Tested on a ZUK Z2 Pro (Android 8) with a Raspberry Pi 5 and uhubctl 2.5.0.

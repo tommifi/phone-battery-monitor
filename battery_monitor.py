@@ -18,7 +18,7 @@ Requirements
 ------------
 - Linger enabled for the user (loginctl enable-linger).
 - ADB over Wi-Fi enabled on the phone (adb tcpip 5555). The mode is lost when
-  the phone reboots and must be re-enabled over USB.
+  the phone reboots; the monitor re-enables it through the USB connection.
 - Sudoers rule /etc/sudoers.d/uhubctl-phone allowing only
   "uhubctl -l 1 -p 1 -a on|off" without password.
 
@@ -60,6 +60,9 @@ MAX_READ_FAILURES = 3
 GRACE_CYCLES = 2
 MAX_SWITCH_FAILURES = 3
 LOW_LEVEL_ALERT = 25
+WIFI_RESTORE_AFTER_FAILURES = 2
+ADB_DOWN_ALERT_FAILURES = 10
+TCPIP_SETTLE_SECONDS = 3
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 TG_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 TG_CHAT_ENV = "TELEGRAM_CHAT_ID"
@@ -135,6 +138,7 @@ class BatteryMonitor:
         self.switch_failures: int = 0
         self.alert_sent: bool = False
         self.low_alert_sent: bool = False
+        self.adb_alert_sent: bool = False
 
     def _run_adb_cmd(self, args: list[str]) -> str | None:
         """Execute an ADB command on the configured device and return stdout.
@@ -259,6 +263,89 @@ class BatteryMonitor:
                 "Run: sudo uhubctl -l 1 -p 1 -a on"
             )
 
+    def _run_adb_global(self, args: list[str], timeout: int = 15) -> str | None:
+        """Execute an ADB command without selecting a device.
+
+        Args:
+            args: Command line arguments to pass to ADB.
+            timeout: Seconds before the command is abandoned.
+
+        Returns:
+            Decoded stdout string if successful, None otherwise.
+        """
+        cmd = [str(self.adb_path)] + args
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=True, timeout=timeout
+            )
+            return result.stdout.strip()
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as err:
+            logger.warning("ADB command failed (%s): %s", " ".join(cmd), err)
+            return None
+
+    def _wifi_adb_reachable(self) -> bool:
+        """Check whether the phone answers over its Wi-Fi ADB address.
+
+        Returns:
+            True if the device state is "device", False otherwise.
+        """
+        return self._run_adb_cmd(["get-state"]) == "device"
+
+    def _usb_serial(self) -> str | None:
+        """Find a phone attached over USB and ready for commands.
+
+        Returns:
+            The USB serial, or None if no ready USB device is listed.
+        """
+        output = self._run_adb_global(["devices"])
+        if not output:
+            return None
+        for line in output.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) == 2 and parts[1] == "device" and ":" not in parts[0]:
+                return parts[0]
+        return None
+
+    def _restore_wifi_adb(self) -> bool:
+        """Bring ADB over Wi-Fi back after a phone reboot or a network drop.
+
+        Tries a plain reconnect first. If the phone does not answer, it looks
+        for the phone on USB and switches it back to TCP mode with adb tcpip.
+
+        Returns:
+            True if the phone answers over Wi-Fi at the end, False otherwise.
+        """
+        self._run_adb_global(["connect", self.device])
+        if self._wifi_adb_reachable():
+            logger.info("ADB over Wi-Fi reconnected.")
+            return True
+        serial = self._usb_serial()
+        if serial is None:
+            logger.warning("No USB device available to re-enable ADB over Wi-Fi.")
+            return False
+        port = self.device.rpartition(":")[2] if ":" in self.device else "5555"
+        logger.warning("Re-enabling ADB over Wi-Fi through USB device %s.", serial)
+        self._run_adb_global(["-s", serial, "tcpip", port])
+        time.sleep(TCPIP_SETTLE_SECONDS)
+        self._run_adb_global(["connect", self.device])
+        restored = self._wifi_adb_reachable()
+        if restored:
+            logger.info("ADB over Wi-Fi restored.")
+        else:
+            logger.warning("ADB over Wi-Fi still unreachable after tcpip.")
+        return restored
+
+    def _recover_wifi_adb(self) -> None:
+        """Try to restore ADB over Wi-Fi while reads fail, and alert once if it stays down."""
+        if self.read_failures >= WIFI_RESTORE_AFTER_FAILURES:
+            self._restore_wifi_adb()
+        if self.read_failures >= ADB_DOWN_ALERT_FAILURES and not self.adb_alert_sent:
+            host = socket.gethostname()
+            self.adb_alert_sent = send_telegram_message(
+                f"battery-monitor on {host}: ADB over Wi-Fi unreachable for "
+                f"{self.read_failures} cycles. If the phone rebooted, run: adb tcpip 5555"
+            )
+
     def _update_charge_state(self, level: int) -> None:
         """Apply the hysteresis rules to the charging port.
 
@@ -336,8 +423,10 @@ class BatteryMonitor:
             level = self.get_battery_level()
             if level < 0:
                 self._handle_read_failure()
+                self._recover_wifi_adb()
             else:
                 self.read_failures = 0
+                self.adb_alert_sent = False
                 logger.debug("Level: %d%%, charging: %s", level, self.charging_enabled)
                 self._update_charge_state(level)
                 self._check_low_level(level)
