@@ -24,7 +24,7 @@ Keeps the battery of an Android phone, permanently attached to a Raspberry Pi, b
 - Android phone with ADB over Wi-Fi enabled (adb tcpip 5555). Without root this mode is lost at every phone reboot and must be re-enabled over USB.
 - DHCP reservation for the phone, so its address does not change.
 - Python 3.10 or newer, standard library only at runtime.
-- Telegram alerts (optional): PORTFOLIO_WATCH_TG_TOKEN and PORTFOLIO_WATCH_TG_CHAT_ID in an environment file. Do not put comments or quotes on those lines, systemd does not strip them.
+- Telegram alerts (optional): TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in an environment file, for example ~/.config/telegram/infra.env (mode 600, one bot per file). Do not put comments or quotes on those lines, systemd does not strip them.
 
 ## Setup
 

@@ -61,8 +61,8 @@ GRACE_CYCLES = 2
 MAX_SWITCH_FAILURES = 3
 LOW_LEVEL_ALERT = 25
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
-TG_TOKEN_ENV = "PORTFOLIO_WATCH_TG_TOKEN"
-TG_CHAT_ENV = "PORTFOLIO_WATCH_TG_CHAT_ID"
+TG_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
+TG_CHAT_ENV = "TELEGRAM_CHAT_ID"
 
 
 def send_telegram_message(text: str) -> bool:
