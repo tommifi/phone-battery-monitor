@@ -63,6 +63,7 @@ LOW_LEVEL_ALERT = 25
 WIFI_RESTORE_AFTER_FAILURES = 2
 ADB_DOWN_ALERT_FAILURES = 10
 TCPIP_SETTLE_SECONDS = 3
+LEVEL_LOG_INTERVAL_SECONDS = 600
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 TG_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 TG_CHAT_ENV = "TELEGRAM_CHAT_ID"
@@ -207,8 +208,15 @@ class BatteryMonitor:
         """
         action = "on" if enabled else "off"
         cmd = [
-            "sudo", "-n", str(UHUBCTL_PATH),
-            "-l", HUB_LOCATION, "-p", HUB_PORT, "-a", action,
+            "sudo",
+            "-n",
+            str(UHUBCTL_PATH),
+            "-l",
+            HUB_LOCATION,
+            "-p",
+            HUB_PORT,
+            "-a",
+            action,
         ]
         try:
             subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=20)
@@ -279,7 +287,11 @@ class BatteryMonitor:
                 cmd, capture_output=True, text=True, check=True, timeout=timeout
             )
             return result.stdout.strip()
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as err:
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            OSError,
+        ) as err:
             logger.warning("ADB command failed (%s): %s", " ".join(cmd), err)
             return None
 
@@ -393,7 +405,14 @@ class BatteryMonitor:
         """Set display brightness to minimum level via ADB."""
         logger.info("Setting screen brightness to minimum (%d).", MIN_SCREEN_BRIGHTNESS)
         self._run_adb_cmd(
-            ["shell", "settings", "put", "system", "screen_brightness", str(MIN_SCREEN_BRIGHTNESS)]
+            [
+                "shell",
+                "settings",
+                "put",
+                "system",
+                "screen_brightness",
+                str(MIN_SCREEN_BRIGHTNESS),
+            ]
         )
 
     def stop_heavy_services(self) -> None:
@@ -418,6 +437,7 @@ class BatteryMonitor:
         logger.info("Starting 24/7 Battery Protection Monitor...")
         self.set_charging(True)
         self._dim_display()
+        last_level_log = 0.0
 
         while True:
             level = self.get_battery_level()
@@ -427,7 +447,12 @@ class BatteryMonitor:
             else:
                 self.read_failures = 0
                 self.adb_alert_sent = False
-                logger.debug("Level: %d%%, charging: %s", level, self.charging_enabled)
+                now = time.monotonic()
+                if now - last_level_log >= LEVEL_LOG_INTERVAL_SECONDS:
+                    logger.info(
+                        "Level: %d%%, port on: %s", level, self.charging_enabled
+                    )
+                    last_level_log = now
                 self._update_charge_state(level)
                 self._check_low_level(level)
                 self._check_power_loss(level)
