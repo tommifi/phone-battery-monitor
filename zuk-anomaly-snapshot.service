@@ -1,0 +1,6 @@
+[Unit]
+Description=Capture a phone process snapshot on abnormal battery drain
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/repos/phone-battery-monitor/anomaly_snapshot.py
