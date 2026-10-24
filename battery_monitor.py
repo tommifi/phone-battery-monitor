@@ -140,6 +140,7 @@ class BatteryMonitor:
         self.alert_sent: bool = False
         self.low_alert_sent: bool = False
         self.adb_alert_sent: bool = False
+        self.display_dimmed: bool = False
 
     def _run_adb_cmd(self, args: list[str]) -> str | None:
         """Execute an ADB command on the configured device and return stdout.
@@ -415,6 +416,20 @@ class BatteryMonitor:
             ]
         )
 
+    def _ensure_display_dimmed(self) -> None:
+        """Dim the display once, retrying until the phone accepts the command.
+
+        The brightness is read back to confirm the change. After a success the
+        flag stays set, so later manual changes are not overwritten.
+        """
+        if self.display_dimmed:
+            return
+        self._dim_display()
+        current = self._run_adb_cmd(
+            ["shell", "settings", "get", "system", "screen_brightness"]
+        )
+        self.display_dimmed = current == str(MIN_SCREEN_BRIGHTNESS)
+
     def stop_heavy_services(self) -> None:
         """Stop resource-intensive services and dim display to save power."""
         logger.warning("Power disconnected! Executing power mitigation steps.")
@@ -436,7 +451,7 @@ class BatteryMonitor:
         """Run the main monitoring loop indefinitely."""
         logger.info("Starting 24/7 Battery Protection Monitor...")
         self.set_charging(True)
-        self._dim_display()
+        self._ensure_display_dimmed()
         last_level_log = 0.0
 
         while True:
@@ -447,6 +462,7 @@ class BatteryMonitor:
             else:
                 self.read_failures = 0
                 self.adb_alert_sent = False
+                self._ensure_display_dimmed()
                 now = time.monotonic()
                 if now - last_level_log >= LEVEL_LOG_INTERVAL_SECONDS:
                     logger.info(
