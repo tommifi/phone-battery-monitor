@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from battery_monitor import BatteryMonitor
+from battery_monitor import REAPPLY_MAX_ATTEMPTS, BatteryMonitor
 
 
 @pytest.fixture
@@ -347,3 +347,22 @@ def test_verify_port_off_respects_cooldown(monitor: BatteryMonitor) -> None:
     with patch.object(monitor, "set_charging") as mock_set:
         monitor._verify_port_off(95)
     mock_set.assert_not_called()
+
+
+def test_verify_port_off_stops_after_max_attempts(monitor: BatteryMonitor) -> None:
+    """No more re-apply once the attempt limit is reached."""
+    monitor.charging_enabled = False
+    monitor.last_off = float("-inf")
+    monitor.reapply_attempts = REAPPLY_MAX_ATTEMPTS
+    with patch.object(monitor, "set_charging") as mock_set:
+        monitor._verify_port_off(95)
+    mock_set.assert_not_called()
+
+
+def test_verify_port_off_counts_attempts(monitor: BatteryMonitor) -> None:
+    """Each re-apply increments the attempt counter."""
+    monitor.charging_enabled = False
+    monitor.last_off = float("-inf")
+    with patch.object(monitor, "set_charging"):
+        monitor._verify_port_off(95)
+    assert monitor.reapply_attempts == 1

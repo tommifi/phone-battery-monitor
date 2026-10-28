@@ -66,6 +66,7 @@ TCPIP_SETTLE_SECONDS = 3
 LEVEL_LOG_INTERVAL_SECONDS = 600
 REAPPLY_MARGIN = 2
 REAPPLY_COOLDOWN_SECONDS = 600
+REAPPLY_MAX_ATTEMPTS = 2
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 TG_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 TG_CHAT_ENV = "TELEGRAM_CHAT_ID"
@@ -144,6 +145,7 @@ class BatteryMonitor:
         self.adb_alert_sent: bool = False
         self.display_dimmed: bool = False
         self.last_off: float = float("-inf")
+        self.reapply_attempts: int = 0
 
     def _run_adb_cmd(self, args: list[str]) -> str | None:
         """Execute an ADB command on the configured device and return stdout.
@@ -241,7 +243,9 @@ class BatteryMonitor:
         self.alert_sent = False
         self.charging_enabled = enabled
         self.grace_cycles = GRACE_CYCLES if enabled else 0
-        if not enabled:
+        if enabled:
+            self.reapply_attempts = 0
+        else:
             self.last_off = time.monotonic()
         logger.info("USB port power switched %s.", action)
         return True
@@ -274,6 +278,9 @@ class BatteryMonitor:
             return
         if time.monotonic() - self.last_off < REAPPLY_COOLDOWN_SECONDS:
             return
+        if self.reapply_attempts >= REAPPLY_MAX_ATTEMPTS:
+            return
+        self.reapply_attempts += 1
         logger.warning(
             "Level %d%% is above the stop level while the port should be off; "
             "re-applying switch off.",
