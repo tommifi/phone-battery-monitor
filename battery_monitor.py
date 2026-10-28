@@ -522,7 +522,7 @@ class BatteryMonitor:
         logger.info("Starting 24/7 Battery Protection Monitor...")
         self._apply_initial_port_state()
         self._ensure_display_dimmed()
-        last_level_log = 0.0
+        last_level_log = -float(LEVEL_LOG_INTERVAL_SECONDS)
 
         while True:
             level = self.get_battery_level()

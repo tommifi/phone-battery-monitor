@@ -471,3 +471,32 @@ def test_set_charging_resets_off_reference_level() -> None:
     with patch("battery_monitor.subprocess.run"):
         assert monitor.set_charging(False)
     assert monitor.off_reference_level is None
+
+
+def test_first_level_line_is_logged_right_after_boot(
+    caplog: "pytest.LogCaptureFixture",
+) -> None:
+    """The first readable level is logged even with a low monotonic clock."""
+    import logging
+    from unittest.mock import patch
+
+    from battery_monitor import BatteryMonitor
+
+    monitor = BatteryMonitor()
+    with (
+        patch.object(monitor, "_apply_initial_port_state"),
+        patch.object(monitor, "_ensure_display_dimmed"),
+        patch.object(monitor, "_update_charge_state"),
+        patch.object(monitor, "_verify_port_off"),
+        patch.object(monitor, "_check_low_level"),
+        patch.object(monitor, "_check_power_loss"),
+        patch.object(monitor, "get_battery_level", return_value=70),
+        patch("battery_monitor.time.monotonic", return_value=5.0),
+        patch("battery_monitor.time.sleep", side_effect=StopIteration),
+        caplog.at_level(logging.INFO),
+    ):
+        try:
+            monitor.monitor_loop()
+        except StopIteration:
+            pass
+    assert any("Level: 70%" in message for message in caplog.messages)
