@@ -366,3 +366,57 @@ def test_verify_port_off_counts_attempts(monitor: BatteryMonitor) -> None:
     with patch.object(monitor, "set_charging"):
         monitor._verify_port_off(95)
     assert monitor.reapply_attempts == 1
+
+
+def _run_startup(levels: list[int]) -> tuple[list[bool], int]:
+    """Run the startup port logic with scripted battery readings.
+
+    Args:
+        levels: Values returned by consecutive battery level reads.
+
+    Returns:
+        The list of set_charging arguments and the number of level reads.
+    """
+    from unittest.mock import patch
+
+    from battery_monitor import BatteryMonitor
+
+    monitor = BatteryMonitor()
+    with (
+        patch.object(monitor, "get_battery_level", side_effect=levels) as get_level,
+        patch.object(monitor, "set_charging") as set_charging,
+        patch("battery_monitor.time.sleep"),
+    ):
+        monitor._apply_initial_port_state()
+    calls = [call.args[0] for call in set_charging.call_args_list]
+    return calls, get_level.call_count
+
+
+def test_startup_high_level_keeps_port_off() -> None:
+    """A level at or above the stop level must not switch the port on."""
+    calls, reads = _run_startup([96])
+    assert calls == [False]
+    assert reads == 1
+
+
+def test_startup_low_level_switches_port_on() -> None:
+    """A level below the stop level switches the port on."""
+    calls, reads = _run_startup([55])
+    assert calls == [True]
+    assert reads == 1
+
+
+def test_startup_unreadable_level_fails_safe_after_retries() -> None:
+    """An unreadable level retries, then switches the port on as fail-safe."""
+    from battery_monitor import STARTUP_READ_ATTEMPTS
+
+    calls, reads = _run_startup([-1] * STARTUP_READ_ATTEMPTS)
+    assert calls == [True]
+    assert reads == STARTUP_READ_ATTEMPTS
+
+
+def test_startup_read_succeeds_on_retry() -> None:
+    """A read that fails first and succeeds later uses the real level."""
+    calls, reads = _run_startup([-1, -1, 90])
+    assert calls == [False]
+    assert reads == 3

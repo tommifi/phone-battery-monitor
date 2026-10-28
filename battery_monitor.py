@@ -98,6 +98,10 @@ def send_telegram_message(text: str) -> bool:
         return False
 
 
+STARTUP_READ_ATTEMPTS = 4
+STARTUP_READ_PAUSE_SECONDS = 10
+
+
 class BatteryMonitor:
     """Controls phone charging by port power and reacts to power loss."""
 
@@ -480,10 +484,35 @@ class BatteryMonitor:
         for service in self.heavy_services:
             logger.info("Power stable. Ready to resume: %s", service)
 
+    def _apply_initial_port_state(self) -> None:
+        """Set the port state at startup using the current battery level.
+
+        The level is read first (with retries, since ADB needs time after a
+        reboot). If it is at or above the stop level the port is switched off,
+        so a restart never resumes charging a full phone. If the level stays
+        unreadable the port is switched on as a fail-safe.
+        """
+        level = -1
+        for attempt in range(STARTUP_READ_ATTEMPTS):
+            if attempt:
+                time.sleep(STARTUP_READ_PAUSE_SECONDS)
+            level = self.get_battery_level()
+            if level >= 0:
+                break
+        if level >= self.stop_level:
+            logger.info(
+                "Startup level %d%% is at or above the stop level; port off.", level
+            )
+            self.set_charging(False)
+            return
+        if level < 0:
+            logger.warning("Startup level unreadable; switching port on as fail-safe.")
+        self.set_charging(True)
+
     def monitor_loop(self) -> None:
         """Run the main monitoring loop indefinitely."""
         logger.info("Starting 24/7 Battery Protection Monitor...")
-        self.set_charging(True)
+        self._apply_initial_port_state()
         self._ensure_display_dimmed()
         last_level_log = 0.0
 
