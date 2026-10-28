@@ -1,6 +1,7 @@
 """Unit tests for the battery_monitor module using pytest."""
 
 import subprocess
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,14 +22,18 @@ def monitor() -> BatteryMonitor:
 
 def test_is_ac_or_usb_powered_true(monitor: BatteryMonitor) -> None:
     """Test battery power detection when USB powered is true."""
-    mock_output = "Current Battery Service state:\n  AC powered: false\n  USB powered: true\n"
+    mock_output = (
+        "Current Battery Service state:\n  AC powered: false\n  USB powered: true\n"
+    )
     with patch.object(monitor, "_run_adb_cmd", return_value=mock_output):
         assert monitor.is_ac_or_usb_powered() is True
 
 
 def test_is_ac_or_usb_powered_false(monitor: BatteryMonitor) -> None:
     """Test battery power detection when both AC and USB are false."""
-    mock_output = "Current Battery Service state:\n  AC powered: false\n  USB powered: false\n"
+    mock_output = (
+        "Current Battery Service state:\n  AC powered: false\n  USB powered: false\n"
+    )
     with patch.object(monitor, "_run_adb_cmd", return_value=mock_output):
         assert monitor.is_ac_or_usb_powered() is False
 
@@ -132,9 +137,10 @@ def test_no_power_loss_check_when_port_off(monitor: BatteryMonitor) -> None:
 def test_grace_period_after_resume(monitor: BatteryMonitor) -> None:
     """Power loss is ignored during the grace cycles after switching on."""
     monitor.grace_cycles = 2
-    with patch.object(monitor, "is_ac_or_usb_powered", return_value=False), patch.object(
-        monitor, "stop_heavy_services"
-    ) as mock_stop:
+    with (
+        patch.object(monitor, "is_ac_or_usb_powered", return_value=False),
+        patch.object(monitor, "stop_heavy_services") as mock_stop,
+    ):
         monitor._check_power_loss(50)
         monitor._check_power_loss(50)
         mock_stop.assert_not_called()
@@ -152,9 +158,10 @@ def test_set_charging_failure_keeps_state(monitor: BatteryMonitor) -> None:
 def test_switch_failure_alert_sent_once(monitor: BatteryMonitor) -> None:
     """One alert is sent after repeated failures, not one per attempt."""
     err = subprocess.CalledProcessError(1, "sudo", stderr="a password is required")
-    with patch("battery_monitor.subprocess.run", side_effect=err), patch(
-        "battery_monitor.send_telegram_message", return_value=True
-    ) as mock_tg:
+    with (
+        patch("battery_monitor.subprocess.run", side_effect=err),
+        patch("battery_monitor.send_telegram_message", return_value=True) as mock_tg,
+    ):
         for _ in range(6):
             assert monitor.set_charging(True) is False
         mock_tg.assert_called_once()
@@ -163,9 +170,10 @@ def test_switch_failure_alert_sent_once(monitor: BatteryMonitor) -> None:
 def test_alert_retried_if_telegram_fails(monitor: BatteryMonitor) -> None:
     """If the alert could not be delivered, the next failure retries it."""
     err = subprocess.CalledProcessError(1, "sudo", stderr="boom")
-    with patch("battery_monitor.subprocess.run", side_effect=err), patch(
-        "battery_monitor.send_telegram_message", return_value=False
-    ) as mock_tg:
+    with (
+        patch("battery_monitor.subprocess.run", side_effect=err),
+        patch("battery_monitor.send_telegram_message", return_value=False) as mock_tg,
+    ):
         for _ in range(5):
             monitor.set_charging(True)
         assert mock_tg.call_count == 3
@@ -216,7 +224,9 @@ def test_low_level_alert_flag_resets_when_port_on(monitor: BatteryMonitor) -> No
 # ADB over Wi-Fi recovery tests
 # ---------------------------------------------------------------------------
 
-DEVICES_BOTH = "List of devices attached\n192.168.100.115:5555\tdevice\n4a64b8f0\tdevice"
+DEVICES_BOTH = (
+    "List of devices attached\n192.168.100.115:5555\tdevice\n4a64b8f0\tdevice"
+)
 
 
 def test_usb_serial_picks_usb_device(monitor: BatteryMonitor) -> None:
@@ -241,8 +251,9 @@ def test_usb_serial_ignores_offline_device(monitor: BatteryMonitor) -> None:
 
 def test_restore_wifi_adb_plain_reconnect(monitor: BatteryMonitor) -> None:
     """If a plain reconnect works, tcpip is not used."""
-    with patch.object(monitor, "_run_adb_global") as mock_global, patch.object(
-        monitor, "_wifi_adb_reachable", return_value=True
+    with (
+        patch.object(monitor, "_run_adb_global") as mock_global,
+        patch.object(monitor, "_wifi_adb_reachable", return_value=True),
     ):
         assert monitor._restore_wifi_adb() is True
         mock_global.assert_called_once_with(["connect", monitor.device])
@@ -250,10 +261,11 @@ def test_restore_wifi_adb_plain_reconnect(monitor: BatteryMonitor) -> None:
 
 def test_restore_wifi_adb_uses_tcpip_via_usb(monitor: BatteryMonitor) -> None:
     """If the reconnect fails, tcpip is sent through the USB device."""
-    with patch.object(monitor, "_run_adb_global") as mock_global, patch.object(
-        monitor, "_wifi_adb_reachable", side_effect=[False, True]
-    ), patch.object(monitor, "_usb_serial", return_value="4a64b8f0"), patch(
-        "battery_monitor.time.sleep"
+    with (
+        patch.object(monitor, "_run_adb_global") as mock_global,
+        patch.object(monitor, "_wifi_adb_reachable", side_effect=[False, True]),
+        patch.object(monitor, "_usb_serial", return_value="4a64b8f0"),
+        patch("battery_monitor.time.sleep"),
     ):
         assert monitor._restore_wifi_adb() is True
         calls = [c.args[0] for c in mock_global.call_args_list]
@@ -262,9 +274,11 @@ def test_restore_wifi_adb_uses_tcpip_via_usb(monitor: BatteryMonitor) -> None:
 
 def test_restore_wifi_adb_no_usb_device(monitor: BatteryMonitor) -> None:
     """Without a USB device nothing more is tried."""
-    with patch.object(monitor, "_run_adb_global") as mock_global, patch.object(
-        monitor, "_wifi_adb_reachable", return_value=False
-    ), patch.object(monitor, "_usb_serial", return_value=None):
+    with (
+        patch.object(monitor, "_run_adb_global") as mock_global,
+        patch.object(monitor, "_wifi_adb_reachable", return_value=False),
+        patch.object(monitor, "_usb_serial", return_value=None),
+    ):
         assert monitor._restore_wifi_adb() is False
         mock_global.assert_called_once_with(["connect", monitor.device])
 
@@ -288,10 +302,48 @@ def test_recover_runs_at_threshold(monitor: BatteryMonitor) -> None:
 def test_adb_down_alert_sent_once(monitor: BatteryMonitor) -> None:
     """One alert is sent while ADB over Wi-Fi stays down."""
     monitor.read_failures = 10
-    with patch.object(monitor, "_restore_wifi_adb"), patch(
-        "battery_monitor.send_telegram_message", return_value=True
-    ) as mock_tg:
+    with (
+        patch.object(monitor, "_restore_wifi_adb"),
+        patch("battery_monitor.send_telegram_message", return_value=True) as mock_tg,
+    ):
         for _ in range(3):
             monitor._recover_wifi_adb()
         mock_tg.assert_called_once()
     assert monitor.adb_alert_sent is True
+
+
+def test_verify_port_off_ignored_when_charging(monitor: BatteryMonitor) -> None:
+    """No re-apply while the port is meant to be on."""
+    monitor.charging_enabled = True
+    with patch.object(monitor, "set_charging") as mock_set:
+        monitor._verify_port_off(95)
+    mock_set.assert_not_called()
+
+
+def test_verify_port_off_ignored_below_margin(monitor: BatteryMonitor) -> None:
+    """No re-apply when the level is within the margin above the stop level."""
+    monitor.charging_enabled = False
+    monitor.last_off = float("-inf")
+    with patch.object(monitor, "set_charging") as mock_set:
+        monitor._verify_port_off(monitor.stop_level + 2)
+    mock_set.assert_not_called()
+
+
+def test_verify_port_off_reapplies_when_level_keeps_rising(
+    monitor: BatteryMonitor,
+) -> None:
+    """The switch off is repeated when the level is above the margin."""
+    monitor.charging_enabled = False
+    monitor.last_off = float("-inf")
+    with patch.object(monitor, "set_charging") as mock_set:
+        monitor._verify_port_off(90)
+    mock_set.assert_called_once_with(False)
+
+
+def test_verify_port_off_respects_cooldown(monitor: BatteryMonitor) -> None:
+    """No re-apply right after a successful switch off."""
+    monitor.charging_enabled = False
+    monitor.last_off = time.monotonic()
+    with patch.object(monitor, "set_charging") as mock_set:
+        monitor._verify_port_off(95)
+    mock_set.assert_not_called()

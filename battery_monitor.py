@@ -64,6 +64,8 @@ WIFI_RESTORE_AFTER_FAILURES = 2
 ADB_DOWN_ALERT_FAILURES = 10
 TCPIP_SETTLE_SECONDS = 3
 LEVEL_LOG_INTERVAL_SECONDS = 600
+REAPPLY_MARGIN = 2
+REAPPLY_COOLDOWN_SECONDS = 600
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 TG_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 TG_CHAT_ENV = "TELEGRAM_CHAT_ID"
@@ -141,6 +143,7 @@ class BatteryMonitor:
         self.low_alert_sent: bool = False
         self.adb_alert_sent: bool = False
         self.display_dimmed: bool = False
+        self.last_off: float = float("-inf")
 
     def _run_adb_cmd(self, args: list[str]) -> str | None:
         """Execute an ADB command on the configured device and return stdout.
@@ -238,6 +241,8 @@ class BatteryMonitor:
         self.alert_sent = False
         self.charging_enabled = enabled
         self.grace_cycles = GRACE_CYCLES if enabled else 0
+        if not enabled:
+            self.last_off = time.monotonic()
         logger.info("USB port power switched %s.", action)
         return True
 
@@ -254,6 +259,27 @@ class BatteryMonitor:
                 f"battery-monitor on {host}: uhubctl {action} failed "
                 f"{self.switch_failures} times in a row. Check the journal."
             )
+
+    def _verify_port_off(self, level: int) -> None:
+        """Re-apply the port off command if the level keeps rising after a stop.
+
+        The uhubctl command can succeed while the port comes back on, so the
+        battery level is used as the ground truth. Nothing happens during
+        REAPPLY_COOLDOWN_SECONDS after a successful switch off.
+
+        Args:
+            level: Current battery level in percent.
+        """
+        if self.charging_enabled or level <= self.stop_level + REAPPLY_MARGIN:
+            return
+        if time.monotonic() - self.last_off < REAPPLY_COOLDOWN_SECONDS:
+            return
+        logger.warning(
+            "Level %d%% is above the stop level while the port should be off; "
+            "re-applying switch off.",
+            level,
+        )
+        self.set_charging(False)
 
     def _check_low_level(self, level: int) -> None:
         """Send one alert per discharge cycle if the level is low with the port off.
@@ -470,6 +496,7 @@ class BatteryMonitor:
                     )
                     last_level_log = now
                 self._update_charge_state(level)
+                self._verify_port_off(level)
                 self._check_low_level(level)
                 self._check_power_loss(level)
             time.sleep(self.check_interval)
