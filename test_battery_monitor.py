@@ -420,3 +420,54 @@ def test_startup_read_succeeds_on_retry() -> None:
     calls, reads = _run_startup([-1, -1, 90])
     assert calls == [False]
     assert reads == 3
+
+
+def _port_off_monitor() -> "BatteryMonitor":
+    """Build a monitor with the port off and the re-apply cooldown active.
+
+    Returns:
+        A BatteryMonitor whose last switch off just happened.
+    """
+    import time
+
+    from battery_monitor import BatteryMonitor
+
+    monitor = BatteryMonitor()
+    monitor.charging_enabled = False
+    monitor.last_off = time.monotonic()
+    return monitor
+
+
+def test_verify_port_off_skips_when_level_is_falling() -> None:
+    """A level below the reference means the port is off: no re-apply."""
+    from unittest.mock import patch
+
+    monitor = _port_off_monitor()
+    with patch.object(monitor, "set_charging") as set_charging:
+        monitor._verify_port_off(96)
+        monitor.last_off = float("-inf")
+        monitor._verify_port_off(94)
+    set_charging.assert_not_called()
+
+
+def test_verify_port_off_reapplies_when_level_is_flat() -> None:
+    """A level that does not drop after the cooldown triggers the re-apply."""
+    from unittest.mock import patch
+
+    monitor = _port_off_monitor()
+    with patch.object(monitor, "set_charging") as set_charging:
+        monitor._verify_port_off(96)
+        monitor.last_off = float("-inf")
+        monitor._verify_port_off(96)
+    set_charging.assert_called_once_with(False)
+
+
+def test_set_charging_resets_off_reference_level() -> None:
+    """Every successful switch clears the stored reference level."""
+    from unittest.mock import patch
+
+    monitor = _port_off_monitor()
+    monitor.off_reference_level = 96
+    with patch("battery_monitor.subprocess.run"):
+        assert monitor.set_charging(False)
+    assert monitor.off_reference_level is None

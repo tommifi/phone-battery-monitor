@@ -150,6 +150,7 @@ class BatteryMonitor:
         self.display_dimmed: bool = False
         self.last_off: float = float("-inf")
         self.reapply_attempts: int = 0
+        self.off_reference_level: int | None = None
 
     def _run_adb_cmd(self, args: list[str]) -> str | None:
         """Execute an ADB command on the configured device and return stdout.
@@ -247,6 +248,7 @@ class BatteryMonitor:
         self.alert_sent = False
         self.charging_enabled = enabled
         self.grace_cycles = GRACE_CYCLES if enabled else 0
+        self.off_reference_level = None
         if enabled:
             self.reapply_attempts = 0
         else:
@@ -278,12 +280,18 @@ class BatteryMonitor:
         Args:
             level: Current battery level in percent.
         """
-        if self.charging_enabled or level <= self.stop_level + REAPPLY_MARGIN:
+        if self.charging_enabled:
+            return
+        if self.off_reference_level is None:
+            self.off_reference_level = level
+        if level <= self.stop_level + REAPPLY_MARGIN:
             return
         if time.monotonic() - self.last_off < REAPPLY_COOLDOWN_SECONDS:
             return
         if self.reapply_attempts >= REAPPLY_MAX_ATTEMPTS:
             return
+        if level < self.off_reference_level:
+            return  # level is falling: the port is really off
         self.reapply_attempts += 1
         logger.warning(
             "Level %d%% is above the stop level while the port should be off; "
