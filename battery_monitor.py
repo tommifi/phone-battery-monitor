@@ -100,6 +100,8 @@ def send_telegram_message(text: str) -> bool:
 
 STARTUP_READ_ATTEMPTS = 4
 STARTUP_READ_PAUSE_SECONDS = 10
+USB_ADB_ONLY = "adb"
+USB_SETTLE_SECONDS = 8
 
 
 class BatteryMonitor:
@@ -270,6 +272,29 @@ class BatteryMonitor:
                 f"{self.switch_failures} times in a row. Check the journal."
             )
 
+    def _ensure_usb_adb_only(self) -> bool:
+        """Make sure the phone exposes only the adb USB function.
+
+        With MTP active the phone enumerates as 2b4c:101b and re-attaches
+        within a second of a port switch off, so the cut does not hold. With
+        adb only (18d1:4ee7) it holds. This never blocks the switch off: on
+        failure the caller proceeds and only a warning is logged.
+
+        Returns:
+            True if the USB state is adb only after the check, False otherwise.
+        """
+        state = (self._run_adb_cmd(["shell", "getprop", "sys.usb.state"]) or "").strip()
+        if state == USB_ADB_ONLY:
+            return True
+        logger.warning("USB state is %r; forcing adb only before port off.", state)
+        self._run_adb_cmd(["shell", "svc", "usb", "setFunction", USB_ADB_ONLY, "false"])
+        time.sleep(USB_SETTLE_SECONDS)
+        state = (self._run_adb_cmd(["shell", "getprop", "sys.usb.state"]) or "").strip()
+        if state != USB_ADB_ONLY:
+            logger.warning("USB state is still %r; port off may not hold.", state)
+            return False
+        return True
+
     def _verify_port_off(self, level: int) -> None:
         """Re-apply the port off command if the level keeps rising after a stop.
 
@@ -298,6 +323,7 @@ class BatteryMonitor:
             "re-applying switch off.",
             level,
         )
+        self._ensure_usb_adb_only()
         self.set_charging(False)
 
     def _check_low_level(self, level: int) -> None:
@@ -413,6 +439,7 @@ class BatteryMonitor:
         resume = max(self.resume_level, CRITICAL_LEVEL)
         if self.charging_enabled and level >= self.stop_level:
             logger.info("Level %d%% reached, stopping charge.", level)
+            self._ensure_usb_adb_only()
             self.set_charging(False)
         elif not self.charging_enabled and level <= resume:
             logger.info("Level %d%% reached, resuming charge.", level)

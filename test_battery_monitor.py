@@ -500,3 +500,58 @@ def test_first_level_line_is_logged_right_after_boot(
         except StopIteration:
             pass
     assert any("Level: 70%" in message for message in caplog.messages)
+
+
+from collections.abc import Iterator
+from unittest.mock import patch as _patch
+
+import pytest as _pytest
+
+from battery_monitor import BatteryMonitor as _BM
+
+_REAL_ENSURE_USB = _BM._ensure_usb_adb_only
+
+
+@_pytest.fixture(autouse=True)
+def _no_real_usb_switch() -> Iterator[None]:
+    """Keep tests from running the real adb USB function change."""
+    with _patch.object(_BM, "_ensure_usb_adb_only", return_value=True):
+        yield
+
+
+def _usb_ensure(states: list[str | None]) -> tuple[bool, list[list[str]]]:
+    """Run the real USB check with scripted adb answers.
+
+    Args:
+        states: Values returned by consecutive adb commands.
+
+    Returns:
+        The method result and the list of adb argument lists used.
+    """
+    monitor = _BM()
+    with (
+        _patch.object(monitor, "_run_adb_cmd", side_effect=states) as run,
+        _patch("battery_monitor.time.sleep"),
+    ):
+        result = _REAL_ENSURE_USB(monitor)
+    return result, [call.args[0] for call in run.call_args_list]
+
+
+def test_usb_ensure_noop_when_already_adb_only() -> None:
+    """No function change is sent when the state is already adb."""
+    result, calls = _usb_ensure(["adb"])
+    assert result is True
+    assert len(calls) == 1
+
+
+def test_usb_ensure_switches_from_mtp() -> None:
+    """MTP is replaced by adb and the second read confirms it."""
+    result, calls = _usb_ensure(["mtp,adb", "", "adb"])
+    assert result is True
+    assert calls[1][-3:] == ["setFunction", "adb", "false"]
+
+
+def test_usb_ensure_reports_failure_when_state_stays_mtp() -> None:
+    """A state that does not change returns False without raising."""
+    result, _ = _usb_ensure(["mtp,adb", "", "mtp,adb"])
+    assert result is False
