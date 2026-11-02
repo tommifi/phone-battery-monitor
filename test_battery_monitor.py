@@ -555,3 +555,58 @@ def test_usb_ensure_reports_failure_when_state_stays_mtp() -> None:
     """A state that does not change returns False without raising."""
     result, _ = _usb_ensure(["mtp,adb", "", "mtp,adb"])
     assert result is False
+
+
+_REAL_CHECK_NOT_CHARGING = _BM._check_not_charging
+_NOT_CHARGING_OUTPUT = "USB powered: true\n  status: 3\n  level: 60\n"
+
+
+@_pytest.fixture(autouse=True)
+def _no_real_not_charging_check() -> Iterator[None]:
+    """Keep the not-charging check from calling adb in unrelated tests."""
+    with _patch.object(_BM, "_check_not_charging"):
+        yield
+
+
+def test_not_charging_alert_sent_once_after_threshold() -> None:
+    """The alert fires after the threshold and only once per episode."""
+    from battery_monitor import NOT_CHARGING_ALERT_CYCLES
+
+    monitor = _BM()
+    with (
+        _patch.object(monitor, "_run_adb_cmd", return_value=_NOT_CHARGING_OUTPUT),
+        _patch("battery_monitor.send_telegram_message", return_value=True) as send,
+    ):
+        for _ in range(NOT_CHARGING_ALERT_CYCLES - 1):
+            _REAL_CHECK_NOT_CHARGING(monitor, 60)
+        send.assert_not_called()
+        _REAL_CHECK_NOT_CHARGING(monitor, 60)
+        _REAL_CHECK_NOT_CHARGING(monitor, 60)
+    send.assert_called_once()
+
+
+def test_not_charging_resets_when_status_is_charging() -> None:
+    """A charging status clears the counter and sends nothing."""
+    from battery_monitor import NOT_CHARGING_ALERT_CYCLES
+
+    monitor = _BM()
+    monitor.not_charging_cycles = NOT_CHARGING_ALERT_CYCLES - 1
+    charging = "USB powered: true\n  status: 2\n"
+    with (
+        _patch.object(monitor, "_run_adb_cmd", return_value=charging),
+        _patch("battery_monitor.send_telegram_message") as send,
+    ):
+        _REAL_CHECK_NOT_CHARGING(monitor, 60)
+    assert monitor.not_charging_cycles == 0
+    send.assert_not_called()
+
+
+def test_not_charging_skipped_when_port_off_or_level_high() -> None:
+    """No adb call happens with the port off or at/above the stop level."""
+    monitor = _BM()
+    with _patch.object(monitor, "_run_adb_cmd") as run:
+        monitor.charging_enabled = False
+        _REAL_CHECK_NOT_CHARGING(monitor, 60)
+        monitor.charging_enabled = True
+        _REAL_CHECK_NOT_CHARGING(monitor, 85)
+    run.assert_not_called()

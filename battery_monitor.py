@@ -102,6 +102,8 @@ STARTUP_READ_ATTEMPTS = 4
 STARTUP_READ_PAUSE_SECONDS = 10
 USB_ADB_ONLY = "adb"
 USB_SETTLE_SECONDS = 8
+NOT_CHARGING_ALERT_CYCLES = 80
+NOT_CHARGING_STATUSES = (3, 4)
 
 
 class BatteryMonitor:
@@ -153,6 +155,8 @@ class BatteryMonitor:
         self.last_off: float = float("-inf")
         self.reapply_attempts: int = 0
         self.off_reference_level: int | None = None
+        self.not_charging_cycles: int = 0
+        self.not_charging_alert_sent: bool = False
 
     def _run_adb_cmd(self, args: list[str]) -> str | None:
         """Execute an ADB command on the configured device and return stdout.
@@ -453,6 +457,57 @@ class BatteryMonitor:
             logger.error("Fail-safe: level unknown, switching port on.")
             self.set_charging(True)
 
+    def _check_not_charging(self, level: int) -> None:
+        """Alert once when the phone sees USB power but does not charge.
+
+        Applies only while the port should be on and the level is below the
+        stop level. The condition must persist for NOT_CHARGING_ALERT_CYCLES
+        consecutive checks before one Telegram alert is sent per episode.
+
+        Args:
+            level: Current battery level in percent.
+        """
+        if not self.charging_enabled or level >= self.stop_level:
+            self.not_charging_cycles = 0
+            self.not_charging_alert_sent = False
+            return
+        if self.grace_cycles > 0:
+            return
+        output = self._run_adb_cmd(["shell", "dumpsys", "battery"])
+        if not output:
+            return
+        powered = "USB powered: true" in output or "AC powered: true" in output
+        status: int | None = None
+        for line in output.splitlines():
+            key, _, value = line.strip().partition(":")
+            if key == "status":
+                try:
+                    status = int(value.strip())
+                except ValueError:
+                    status = None
+                break
+        if powered and status in NOT_CHARGING_STATUSES:
+            self.not_charging_cycles += 1
+        else:
+            self.not_charging_cycles = 0
+            self.not_charging_alert_sent = False
+        if (
+            self.not_charging_cycles >= NOT_CHARGING_ALERT_CYCLES
+            and not self.not_charging_alert_sent
+        ):
+            logger.error(
+                "Level %d%%: USB powered but status %s for %d cycles.",
+                level,
+                status,
+                self.not_charging_cycles,
+            )
+            host = socket.gethostname()
+            self.not_charging_alert_sent = send_telegram_message(
+                f"battery-monitor on {host}: phone at {level}% is not charging "
+                f"(status {status}) although the port is on and USB powered. "
+                "Check the cable. Try: sudo uhubctl -l 1 -p 1 -a cycle -d 5"
+            )
+
     def _check_power_loss(self, level: int) -> None:
         """Detect real power loss while the port is meant to be on.
 
@@ -570,6 +625,7 @@ class BatteryMonitor:
                 self._verify_port_off(level)
                 self._check_low_level(level)
                 self._check_power_loss(level)
+                self._check_not_charging(level)
             time.sleep(self.check_interval)
 
 
