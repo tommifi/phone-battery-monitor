@@ -104,6 +104,8 @@ USB_ADB_ONLY = "adb"
 USB_SETTLE_SECONDS = 8
 NOT_CHARGING_ALERT_CYCLES = 80
 NOT_CHARGING_STATUSES = (3, 4)
+USB_CHECK_INTERVAL_SECONDS = 600
+USB_FIX_MAX_ATTEMPTS = 3
 
 
 class BatteryMonitor:
@@ -157,6 +159,8 @@ class BatteryMonitor:
         self.off_reference_level: int | None = None
         self.not_charging_cycles: int = 0
         self.not_charging_alert_sent: bool = False
+        self.last_usb_check: float = float("-inf")
+        self.usb_fix_attempts: int = 0
 
     def _run_adb_cmd(self, args: list[str]) -> str | None:
         """Execute an ADB command on the configured device and return stdout.
@@ -508,6 +512,31 @@ class BatteryMonitor:
                 "Check the cable. Try: sudo uhubctl -l 1 -p 1 -a cycle -d 5"
             )
 
+    def _maintain_usb_adb_only(self) -> None:
+        """Periodically force the adb-only USB function.
+
+        A phone reboot brings back the MTP function (identity 2b4c:101b), where
+        a port switch off does not hold. The check runs at most once per
+        USB_CHECK_INTERVAL_SECONDS and gives up after USB_FIX_MAX_ATTEMPTS
+        consecutive failures, so a phone that keeps re-enabling MTP is not
+        re-enumerated forever. A success resets the failure count.
+        """
+        now = time.monotonic()
+        if now - self.last_usb_check < USB_CHECK_INTERVAL_SECONDS:
+            return
+        self.last_usb_check = now
+        if self.usb_fix_attempts >= USB_FIX_MAX_ATTEMPTS:
+            return
+        if self._ensure_usb_adb_only():
+            self.usb_fix_attempts = 0
+            return
+        self.usb_fix_attempts += 1
+        logger.error(
+            "adb-only USB function not applied (%d/%d).",
+            self.usb_fix_attempts,
+            USB_FIX_MAX_ATTEMPTS,
+        )
+
     def _check_power_loss(self, level: int) -> None:
         """Detect real power loss while the port is meant to be on.
 
@@ -626,6 +655,7 @@ class BatteryMonitor:
                 self._check_low_level(level)
                 self._check_power_loss(level)
                 self._check_not_charging(level)
+                self._maintain_usb_adb_only()
             time.sleep(self.check_interval)
 
 

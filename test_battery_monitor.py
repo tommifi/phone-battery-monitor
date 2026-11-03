@@ -610,3 +610,36 @@ def test_not_charging_skipped_when_port_off_or_level_high() -> None:
         monitor.charging_enabled = True
         _REAL_CHECK_NOT_CHARGING(monitor, 85)
     run.assert_not_called()
+
+
+def test_maintain_usb_runs_once_per_interval() -> None:
+    """The USB check runs on the first call and is throttled afterwards."""
+    monitor = _BM()
+    with (
+        _patch.object(monitor, "_ensure_usb_adb_only", return_value=True) as ensure,
+        _patch("battery_monitor.time.monotonic", return_value=1000.0),
+    ):
+        monitor._maintain_usb_adb_only()
+        monitor._maintain_usb_adb_only()
+    assert ensure.call_count == 1
+
+
+def test_maintain_usb_gives_up_after_max_attempts() -> None:
+    """Consecutive failures stop after USB_FIX_MAX_ATTEMPTS calls."""
+    from battery_monitor import USB_FIX_MAX_ATTEMPTS
+
+    monitor = _BM()
+    with _patch.object(monitor, "_ensure_usb_adb_only", return_value=False) as ensure:
+        for _ in range(USB_FIX_MAX_ATTEMPTS + 3):
+            monitor.last_usb_check = float("-inf")
+            monitor._maintain_usb_adb_only()
+    assert ensure.call_count == USB_FIX_MAX_ATTEMPTS
+
+
+def test_maintain_usb_success_resets_attempts() -> None:
+    """A successful check clears the failure count."""
+    monitor = _BM()
+    monitor.usb_fix_attempts = 2
+    with _patch.object(monitor, "_ensure_usb_adb_only", return_value=True):
+        monitor._maintain_usb_adb_only()
+    assert monitor.usb_fix_attempts == 0
