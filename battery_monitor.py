@@ -185,16 +185,17 @@ class BatteryMonitor:
             logger.error("ADB command failed (%s): %s", " ".join(cmd), err)
             return None
 
-    def is_ac_or_usb_powered(self) -> bool:
+    def is_ac_or_usb_powered(self) -> bool | None:
         """Check if the device is receiving power via AC or USB.
 
         Returns:
-            True if device is charging/powered, False otherwise.
+            True if the device is powered, False if it is not, None if the
+            state is unknown because the battery status could not be read.
         """
         output = self._run_adb_cmd(["shell", "dumpsys", "battery"])
         if not output:
             logger.warning("Unable to fetch battery status via ADB.")
-            return False
+            return None
 
         ac_online = "AC powered: true" in output
         usb_online = "USB powered: true" in output
@@ -549,6 +550,9 @@ class BatteryMonitor:
             self.grace_cycles -= 1
             return
         powered = self.is_ac_or_usb_powered()
+        if powered is None:
+            logger.debug("Power state unknown (ADB read failed), skipping check.")
+            return
         if not powered and self.is_power_connected:
             logger.error("Power loss detected! Battery level: %d%%", level)
             self.is_power_connected = False

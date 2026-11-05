@@ -148,6 +148,28 @@ def test_grace_period_after_resume(monitor: BatteryMonitor) -> None:
         mock_stop.assert_called_once()
 
 
+def test_is_ac_or_usb_powered_unknown_on_read_failure(
+    monitor: BatteryMonitor,
+) -> None:
+    """A failed dumpsys read yields None (unknown), not False."""
+    with patch.object(monitor, "_run_adb_cmd", return_value=""):
+        assert monitor.is_ac_or_usb_powered() is None
+
+
+def test_power_loss_ignored_when_state_unknown(monitor: BatteryMonitor) -> None:
+    """An unreadable power state is not treated as a power loss."""
+    monitor.charging_enabled = True
+    monitor.grace_cycles = 0
+    monitor.is_power_connected = True
+    with (
+        patch.object(monitor, "is_ac_or_usb_powered", return_value=None),
+        patch.object(monitor, "stop_heavy_services") as mock_stop,
+    ):
+        monitor._check_power_loss(40)
+        mock_stop.assert_not_called()
+    assert monitor.is_power_connected is True
+
+
 def test_set_charging_failure_keeps_state(monitor: BatteryMonitor) -> None:
     """A failed uhubctl call does not change the tracked state."""
     with patch("battery_monitor.subprocess.run", side_effect=OSError("boom")):
