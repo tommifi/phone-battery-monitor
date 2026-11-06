@@ -665,3 +665,62 @@ def test_maintain_usb_success_resets_attempts() -> None:
     with _patch.object(monitor, "_ensure_usb_adb_only", return_value=True):
         monitor._maintain_usb_adb_only()
     assert monitor.usb_fix_attempts == 0
+
+
+_REAL_RECOVER_NOT_CHARGING = _BM._recover_not_charging
+
+
+@_pytest.fixture(autouse=True)
+def _no_real_recovery() -> Iterator[None]:
+    """Never switch the real USB port or reboot the phone during tests."""
+    with _patch.object(_BM, "_recover_not_charging"):
+        yield
+
+
+def test_recovery_port_cycle_runs_once(monitor: BatteryMonitor) -> None:
+    """The port is switched off then on once per episode."""
+    monitor.not_charging_cycles = 80
+    with (
+        _patch.object(monitor, "set_charging", return_value=True) as mock_set,
+        _patch("battery_monitor.time.sleep"),
+        _patch("battery_monitor.send_telegram_message", return_value=True),
+    ):
+        _REAL_RECOVER_NOT_CHARGING(monitor, 60)
+        _REAL_RECOVER_NOT_CHARGING(monitor, 60)
+    assert [c.args[0] for c in mock_set.call_args_list] == [False, True]
+
+
+def test_recovery_alert_when_port_stays_off(monitor: BatteryMonitor) -> None:
+    """A port that cannot be switched back on triggers a final alert."""
+    monitor.not_charging_cycles = 80
+    with (
+        _patch.object(monitor, "set_charging", side_effect=[True, False, False, False]),
+        _patch("battery_monitor.time.sleep"),
+        _patch("battery_monitor.send_telegram_message", return_value=True) as mock_tg,
+    ):
+        _REAL_RECOVER_NOT_CHARGING(monitor, 60)
+    assert mock_tg.call_count == 2
+
+
+def test_recovery_reboots_after_port_cycle(monitor: BatteryMonitor) -> None:
+    """The phone is rebooted once when the port cycle did not help."""
+    monitor.port_cycle_done = True
+    monitor.not_charging_cycles = 120
+    with (
+        _patch.object(monitor, "_run_adb_cmd") as mock_adb,
+        _patch("battery_monitor.send_telegram_message", return_value=True),
+    ):
+        _REAL_RECOVER_NOT_CHARGING(monitor, 60)
+        monitor.not_charging_cycles = 120
+        _REAL_RECOVER_NOT_CHARGING(monitor, 60)
+    mock_adb.assert_called_once_with(["reboot"])
+
+
+def test_recovery_reboot_capped_to_one_per_day(monitor: BatteryMonitor) -> None:
+    """A second episode within 24 h does not reboot the phone again."""
+    monitor.port_cycle_done = True
+    monitor.not_charging_cycles = 120
+    monitor.last_reboot = time.monotonic()
+    with _patch.object(monitor, "_run_adb_cmd") as mock_adb:
+        _REAL_RECOVER_NOT_CHARGING(monitor, 60)
+    mock_adb.assert_not_called()

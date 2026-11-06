@@ -104,6 +104,10 @@ USB_ADB_ONLY = "adb"
 USB_SETTLE_SECONDS = 8
 NOT_CHARGING_ALERT_CYCLES = 80
 NOT_CHARGING_STATUSES = (3, 4)
+NOT_CHARGING_REBOOT_CYCLES = 120
+PORT_CYCLE_PAUSE_SECONDS = 5
+PORT_ON_RETRIES = 3
+PHONE_REBOOT_MIN_INTERVAL_SECONDS = 24 * 3600
 USB_CHECK_INTERVAL_SECONDS = 600
 USB_FIX_MAX_ATTEMPTS = 3
 
@@ -159,6 +163,9 @@ class BatteryMonitor:
         self.off_reference_level: int | None = None
         self.not_charging_cycles: int = 0
         self.not_charging_alert_sent: bool = False
+        self.port_cycle_done: bool = False
+        self.reboot_done: bool = False
+        self.last_reboot: float | None = None
         self.last_usb_check: float = float("-inf")
         self.usb_fix_attempts: int = 0
 
@@ -475,6 +482,8 @@ class BatteryMonitor:
         if not self.charging_enabled or level >= self.stop_level:
             self.not_charging_cycles = 0
             self.not_charging_alert_sent = False
+            self.port_cycle_done = False
+            self.reboot_done = False
             return
         if self.grace_cycles > 0:
             return
@@ -496,6 +505,8 @@ class BatteryMonitor:
         else:
             self.not_charging_cycles = 0
             self.not_charging_alert_sent = False
+            self.port_cycle_done = False
+            self.reboot_done = False
         if (
             self.not_charging_cycles >= NOT_CHARGING_ALERT_CYCLES
             and not self.not_charging_alert_sent
@@ -510,8 +521,70 @@ class BatteryMonitor:
             self.not_charging_alert_sent = send_telegram_message(
                 f"battery-monitor on {host}: phone at {level}% is not charging "
                 f"(status {status}) although the port is on and USB powered. "
-                "Check the cable. Try: sudo uhubctl -l 1 -p 1 -a cycle -d 5"
+                "Check the cable. An automatic port cycle follows."
             )
+        if self.not_charging_cycles >= NOT_CHARGING_ALERT_CYCLES:
+            self._recover_not_charging(level)
+
+    def _cycle_port(self, level: int) -> None:
+        """Switch the USB port off and on again to renegotiate charging.
+
+        Uses set_charging (allowed by sudoers), not uhubctl -a cycle.
+
+        Args:
+            level: Current battery level in percent, used for the alert.
+        """
+        host = socket.gethostname()
+        logger.warning("Level %d%%: not charging, cycling the USB port.", level)
+        send_telegram_message(
+            f"battery-monitor on {host}: phone at {level}% not charging, "
+            "cycling the USB port."
+        )
+        if not self.set_charging(False):
+            return
+        time.sleep(PORT_CYCLE_PAUSE_SECONDS)
+        for _ in range(PORT_ON_RETRIES):
+            if self.set_charging(True):
+                return
+            time.sleep(PORT_CYCLE_PAUSE_SECONDS)
+        logger.error("Port cycle: unable to switch the port back on.")
+        send_telegram_message(
+            f"battery-monitor on {host}: port cycle done but the port could "
+            "not be switched back on. Manual intervention required."
+        )
+
+    def _recover_not_charging(self, level: int) -> None:
+        """Recover from a persistent not-charging state, one stage at a time.
+
+        Stage 1 is one port cycle per episode. Stage 2 is one phone reboot
+        per episode after NOT_CHARGING_REBOOT_CYCLES, at most once every
+        PHONE_REBOOT_MIN_INTERVAL_SECONDS (the cap is kept in memory).
+
+        Args:
+            level: Current battery level in percent.
+        """
+        if not self.port_cycle_done:
+            self.port_cycle_done = True
+            self._cycle_port(level)
+            return
+        if self.not_charging_cycles < NOT_CHARGING_REBOOT_CYCLES or self.reboot_done:
+            return
+        self.reboot_done = True
+        now = time.monotonic()
+        if (
+            self.last_reboot is not None
+            and now - self.last_reboot < PHONE_REBOOT_MIN_INTERVAL_SECONDS
+        ):
+            logger.warning("Phone reboot skipped: one already done in the last 24 h.")
+            return
+        self.last_reboot = now
+        logger.error("Level %d%%: still not charging, rebooting the phone.", level)
+        send_telegram_message(
+            f"battery-monitor on {socket.gethostname()}: phone at {level}% still "
+            "not charging after a port cycle, rebooting the phone."
+        )
+        self._run_adb_cmd(["reboot"])
+        self.not_charging_cycles = 0
 
     def _maintain_usb_adb_only(self) -> None:
         """Periodically force the adb-only USB function.
