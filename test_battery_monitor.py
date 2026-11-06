@@ -2,6 +2,7 @@
 
 import subprocess
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -524,20 +525,13 @@ def test_first_level_line_is_logged_right_after_boot(
     assert any("Level: 70%" in message for message in caplog.messages)
 
 
-from collections.abc import Iterator
-from unittest.mock import patch as _patch
-
-import pytest as _pytest
-
-from battery_monitor import BatteryMonitor as _BM
-
-_REAL_ENSURE_USB = _BM._ensure_usb_adb_only
+_REAL_ENSURE_USB = BatteryMonitor._ensure_usb_adb_only
 
 
-@_pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True)
 def _no_real_usb_switch() -> Iterator[None]:
     """Keep tests from running the real adb USB function change."""
-    with _patch.object(_BM, "_ensure_usb_adb_only", return_value=True):
+    with patch.object(BatteryMonitor, "_ensure_usb_adb_only", return_value=True):
         yield
 
 
@@ -550,10 +544,10 @@ def _usb_ensure(states: list[str | None]) -> tuple[bool, list[list[str]]]:
     Returns:
         The method result and the list of adb argument lists used.
     """
-    monitor = _BM()
+    monitor = BatteryMonitor()
     with (
-        _patch.object(monitor, "_run_adb_cmd", side_effect=states) as run,
-        _patch("battery_monitor.time.sleep"),
+        patch.object(monitor, "_run_adb_cmd", side_effect=states) as run,
+        patch("battery_monitor.time.sleep"),
     ):
         result = _REAL_ENSURE_USB(monitor)
     return result, [call.args[0] for call in run.call_args_list]
@@ -579,14 +573,14 @@ def test_usb_ensure_reports_failure_when_state_stays_mtp() -> None:
     assert result is False
 
 
-_REAL_CHECK_NOT_CHARGING = _BM._check_not_charging
+_REAL_CHECK_NOT_CHARGING = BatteryMonitor._check_not_charging
 _NOT_CHARGING_OUTPUT = "USB powered: true\n  status: 3\n  level: 60\n"
 
 
-@_pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True)
 def _no_real_not_charging_check() -> Iterator[None]:
     """Keep the not-charging check from calling adb in unrelated tests."""
-    with _patch.object(_BM, "_check_not_charging"):
+    with patch.object(BatteryMonitor, "_check_not_charging"):
         yield
 
 
@@ -594,10 +588,10 @@ def test_not_charging_alert_sent_once_after_threshold() -> None:
     """The alert fires after the threshold and only once per episode."""
     from battery_monitor import NOT_CHARGING_ALERT_CYCLES
 
-    monitor = _BM()
+    monitor = BatteryMonitor()
     with (
-        _patch.object(monitor, "_run_adb_cmd", return_value=_NOT_CHARGING_OUTPUT),
-        _patch("battery_monitor.send_telegram_message", return_value=True) as send,
+        patch.object(monitor, "_run_adb_cmd", return_value=_NOT_CHARGING_OUTPUT),
+        patch("battery_monitor.send_telegram_message", return_value=True) as send,
     ):
         for _ in range(NOT_CHARGING_ALERT_CYCLES - 1):
             _REAL_CHECK_NOT_CHARGING(monitor, 60)
@@ -611,12 +605,12 @@ def test_not_charging_resets_when_status_is_charging() -> None:
     """A charging status clears the counter and sends nothing."""
     from battery_monitor import NOT_CHARGING_ALERT_CYCLES
 
-    monitor = _BM()
+    monitor = BatteryMonitor()
     monitor.not_charging_cycles = NOT_CHARGING_ALERT_CYCLES - 1
     charging = "USB powered: true\n  status: 2\n"
     with (
-        _patch.object(monitor, "_run_adb_cmd", return_value=charging),
-        _patch("battery_monitor.send_telegram_message") as send,
+        patch.object(monitor, "_run_adb_cmd", return_value=charging),
+        patch("battery_monitor.send_telegram_message") as send,
     ):
         _REAL_CHECK_NOT_CHARGING(monitor, 60)
     assert monitor.not_charging_cycles == 0
@@ -625,8 +619,8 @@ def test_not_charging_resets_when_status_is_charging() -> None:
 
 def test_not_charging_skipped_when_port_off_or_level_high() -> None:
     """No adb call happens with the port off or at/above the stop level."""
-    monitor = _BM()
-    with _patch.object(monitor, "_run_adb_cmd") as run:
+    monitor = BatteryMonitor()
+    with patch.object(monitor, "_run_adb_cmd") as run:
         monitor.charging_enabled = False
         _REAL_CHECK_NOT_CHARGING(monitor, 60)
         monitor.charging_enabled = True
@@ -636,10 +630,10 @@ def test_not_charging_skipped_when_port_off_or_level_high() -> None:
 
 def test_maintain_usb_runs_once_per_interval() -> None:
     """The USB check runs on the first call and is throttled afterwards."""
-    monitor = _BM()
+    monitor = BatteryMonitor()
     with (
-        _patch.object(monitor, "_ensure_usb_adb_only", return_value=True) as ensure,
-        _patch("battery_monitor.time.monotonic", return_value=1000.0),
+        patch.object(monitor, "_ensure_usb_adb_only", return_value=True) as ensure,
+        patch("battery_monitor.time.monotonic", return_value=1000.0),
     ):
         monitor._maintain_usb_adb_only()
         monitor._maintain_usb_adb_only()
@@ -650,8 +644,8 @@ def test_maintain_usb_gives_up_after_max_attempts() -> None:
     """Consecutive failures stop after USB_FIX_MAX_ATTEMPTS calls."""
     from battery_monitor import USB_FIX_MAX_ATTEMPTS
 
-    monitor = _BM()
-    with _patch.object(monitor, "_ensure_usb_adb_only", return_value=False) as ensure:
+    monitor = BatteryMonitor()
+    with patch.object(monitor, "_ensure_usb_adb_only", return_value=False) as ensure:
         for _ in range(USB_FIX_MAX_ATTEMPTS + 3):
             monitor.last_usb_check = float("-inf")
             monitor._maintain_usb_adb_only()
@@ -660,20 +654,20 @@ def test_maintain_usb_gives_up_after_max_attempts() -> None:
 
 def test_maintain_usb_success_resets_attempts() -> None:
     """A successful check clears the failure count."""
-    monitor = _BM()
+    monitor = BatteryMonitor()
     monitor.usb_fix_attempts = 2
-    with _patch.object(monitor, "_ensure_usb_adb_only", return_value=True):
+    with patch.object(monitor, "_ensure_usb_adb_only", return_value=True):
         monitor._maintain_usb_adb_only()
     assert monitor.usb_fix_attempts == 0
 
 
-_REAL_RECOVER_NOT_CHARGING = _BM._recover_not_charging
+_REAL_RECOVER_NOT_CHARGING = BatteryMonitor._recover_not_charging
 
 
-@_pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True)
 def _no_real_recovery() -> Iterator[None]:
     """Never switch the real USB port or reboot the phone during tests."""
-    with _patch.object(_BM, "_recover_not_charging"):
+    with patch.object(BatteryMonitor, "_recover_not_charging"):
         yield
 
 
@@ -681,9 +675,9 @@ def test_recovery_port_cycle_runs_once(monitor: BatteryMonitor) -> None:
     """The port is switched off then on once per episode."""
     monitor.not_charging_cycles = 80
     with (
-        _patch.object(monitor, "set_charging", return_value=True) as mock_set,
-        _patch("battery_monitor.time.sleep"),
-        _patch("battery_monitor.send_telegram_message", return_value=True),
+        patch.object(monitor, "set_charging", return_value=True) as mock_set,
+        patch("battery_monitor.time.sleep"),
+        patch("battery_monitor.send_telegram_message", return_value=True),
     ):
         _REAL_RECOVER_NOT_CHARGING(monitor, 60)
         _REAL_RECOVER_NOT_CHARGING(monitor, 60)
@@ -694,9 +688,9 @@ def test_recovery_alert_when_port_stays_off(monitor: BatteryMonitor) -> None:
     """A port that cannot be switched back on triggers a final alert."""
     monitor.not_charging_cycles = 80
     with (
-        _patch.object(monitor, "set_charging", side_effect=[True, False, False, False]),
-        _patch("battery_monitor.time.sleep"),
-        _patch("battery_monitor.send_telegram_message", return_value=True) as mock_tg,
+        patch.object(monitor, "set_charging", side_effect=[True, False, False, False]),
+        patch("battery_monitor.time.sleep"),
+        patch("battery_monitor.send_telegram_message", return_value=True) as mock_tg,
     ):
         _REAL_RECOVER_NOT_CHARGING(monitor, 60)
     assert mock_tg.call_count == 2
@@ -707,8 +701,8 @@ def test_recovery_reboots_after_port_cycle(monitor: BatteryMonitor) -> None:
     monitor.port_cycle_done = True
     monitor.not_charging_cycles = 120
     with (
-        _patch.object(monitor, "_run_adb_cmd") as mock_adb,
-        _patch("battery_monitor.send_telegram_message", return_value=True),
+        patch.object(monitor, "_run_adb_cmd") as mock_adb,
+        patch("battery_monitor.send_telegram_message", return_value=True),
     ):
         _REAL_RECOVER_NOT_CHARGING(monitor, 60)
         monitor.not_charging_cycles = 120
@@ -721,6 +715,6 @@ def test_recovery_reboot_capped_to_one_per_day(monitor: BatteryMonitor) -> None:
     monitor.port_cycle_done = True
     monitor.not_charging_cycles = 120
     monitor.last_reboot = time.monotonic()
-    with _patch.object(monitor, "_run_adb_cmd") as mock_adb:
+    with patch.object(monitor, "_run_adb_cmd") as mock_adb:
         _REAL_RECOVER_NOT_CHARGING(monitor, 60)
     mock_adb.assert_not_called()
