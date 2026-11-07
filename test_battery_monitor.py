@@ -535,7 +535,7 @@ def _no_real_usb_switch() -> Iterator[None]:
         yield
 
 
-def _usb_ensure(states: list[str | None]) -> tuple[bool, list[list[str]]]:
+def _usb_ensure(states: list[str | None]) -> tuple[bool | None, list[list[str]]]:
     """Run the real USB check with scripted adb answers.
 
     Args:
@@ -571,6 +571,33 @@ def test_usb_ensure_reports_failure_when_state_stays_mtp() -> None:
     """A state that does not change returns False without raising."""
     result, _ = _usb_ensure(["mtp,adb", "", "mtp,adb"])
     assert result is False
+
+
+def test_usb_ensure_unknown_when_state_empty() -> None:
+    """An empty state returns None and never sends setFunction."""
+    result, calls = _usb_ensure([""])
+    assert result is None
+    assert len(calls) == 1
+
+
+def test_usb_ensure_unknown_when_adb_read_fails() -> None:
+    """A failed adb read (None) is unknown too, and changes nothing."""
+    result, calls = _usb_ensure([None])
+    assert result is None
+    assert all("setFunction" not in call for call in calls)
+
+
+def test_maintain_usb_unknown_does_not_count_as_failure() -> None:
+    """Unknown states never exhaust the retry budget."""
+    from battery_monitor import USB_FIX_MAX_ATTEMPTS
+
+    monitor = BatteryMonitor()
+    with patch.object(monitor, "_ensure_usb_adb_only", return_value=None) as ensure:
+        for _ in range(USB_FIX_MAX_ATTEMPTS + 3):
+            monitor.last_usb_check = float("-inf")
+            monitor._maintain_usb_adb_only()
+    assert ensure.call_count == USB_FIX_MAX_ATTEMPTS + 3
+    assert monitor.usb_fix_attempts == 0
 
 
 _REAL_CHECK_NOT_CHARGING = BatteryMonitor._check_not_charging

@@ -288,7 +288,7 @@ class BatteryMonitor:
                 f"{self.switch_failures} times in a row. Check the journal."
             )
 
-    def _ensure_usb_adb_only(self) -> bool:
+    def _ensure_usb_adb_only(self) -> bool | None:
         """Make sure the phone exposes only the adb USB function.
 
         With MTP active the phone enumerates as 2b4c:101b and re-attaches
@@ -297,12 +297,17 @@ class BatteryMonitor:
         failure the caller proceeds and only a warning is logged.
 
         Returns:
-            True if the USB state is adb only after the check, False otherwise.
+            True if the USB state is adb only after the check, False if it
+            could not be forced, None if the state is unknown (empty or ADB
+            read failed). In the unknown case nothing is changed on the phone.
         """
         state = (self._run_adb_cmd(["shell", "getprop", "sys.usb.state"]) or "").strip()
         if state == USB_ADB_ONLY:
             return True
-        logger.warning("USB state is %r; forcing adb only before port off.", state)
+        if not state:
+            logger.warning("USB state unreadable; adb-only check skipped.")
+            return None
+        logger.warning("USB state is %r; forcing adb only.", state)
         self._run_adb_cmd(["shell", "svc", "usb", "setFunction", USB_ADB_ONLY, "false"])
         time.sleep(USB_SETTLE_SECONDS)
         state = (self._run_adb_cmd(["shell", "getprop", "sys.usb.state"]) or "").strip()
@@ -601,7 +606,10 @@ class BatteryMonitor:
         self.last_usb_check = now
         if self.usb_fix_attempts >= USB_FIX_MAX_ATTEMPTS:
             return
-        if self._ensure_usb_adb_only():
+        result = self._ensure_usb_adb_only()
+        if result is None:
+            return
+        if result:
             self.usb_fix_attempts = 0
             return
         self.usb_fix_attempts += 1
