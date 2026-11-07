@@ -85,3 +85,21 @@ D. restart_heavy_services si limita a loggare: i servizi li rialza la sentinella
 - Sudoers: la regola e in /etc/sudoers riga 60, solo uhubctl on/off (non cycle).
 - RISCHIO CHIUSO (si gestisce qui: la sopravvivenza del bot e di questa chat): gramaddict.service ha ExecStartPre=check_phone_clock.py che esce 1 se ADB non risponde per 45 s, Restart=on-failure, RestartSec=10, StartLimitBurst=3/5min. Con ADB giu per >3-4 min durante un riavvio del bot l'unit finisce in failed e non si rialza. Proposte: StartLimitIntervalSec=0 o RestartSec lungo.
 - Fix applicato il 05/11: drop-in ~/.config/systemd/user/gramaddict.service.d/survival.conf (StartLimitIntervalSec=0, RestartSec=60), fuori dal repo. Verificato: enabled, Linger=yes, sentinella e bot in *.wants.
+
+## Aggiornamento sessione 07/11 (prove generali)
+Prove superate dal vivo:
+- Reboot del Pi (15:10): servizi attivi dopo 2 minuti, ADB USB e Wi-Fi subito disponibili, il monitor ha rilevato il livello con 4 tentativi e acceso la porta alle 15:11:03. Il bot e ripartito da solo, atx-agent e uiautomator vivi.
+- Reboot del telefono (15:15:02): ADB Wi-Fi tornato alle 15:16:02 (circa 60 s, non 7 minuti), 3 letture "unreadable" senza falso Power loss (fix 5a13cc4 confermato). sys.usb.state corretto da mtp,adb a adb alle 15:21:05 (circa 6 min). Bot rialzato da solo entro le 15:25.
+- Spegnimento del Pi di 15 minuti (non pianificato, circa 15:40-15:53): al ritorno ADB e porta ripristinati da soli, livello 52%.
+- Simulazione not-charging (dumpsys battery set status 3 alle 15:57:06): alle 16:17:11 log "USB powered but status 3 for 80 cycles", alle 16:17:12 ciclo porta (off 6 s, poi on), messaggio Telegram RICEVUTO. Con 80 cicli sono passati circa 20 min, quindi i cicli reali durano circa 15 s. Stato falso tolto a mano con dumpsys battery reset (status 2, livello 54%).
+Note:
+- send_telegram_message logga solo gli errori, il successo non viene loggato: l'unica prova di invio e il messaggio ricevuto.
+- Non provata dal vivo: seconda fase (adb reboot a 120 cicli), coperta solo dai test pytest.
+- Non provato se il ciclo porta basterebbe in un guasto reale come quello del 1/11 (causa ancora ignota).
+- Bilancio energetico: livello 52% sia alle 15:56 sia alle 16:23, giornata con bot attivo a margine quasi zero con circa 450 mA in ingresso. Soglie 40/80 invariate.
+
+## Prossimi passi aggiornati
+1. Fix _ensure_usb_adb_only (riga 302 circa) e _maintain_usb_adb_only (riga 589 circa): se getprop sys.usb.state e vuoto (lettura fallita) NON lanciare svc usb setFunction, trattarlo come sconosciuto. Con test, commit, push.
+2. Messaggio WARNING cosmetico: "before port off" anche dal controllo periodico.
+3. Riassunto di 2-3 giorni di zuk_current_log.csv per giudicare il margine energetico, senza cambiare le soglie.
+4. Ultima verifica a freddo (stop servizio e riavvio) solo se si cambia codice. Ultimi 2 giorni prima del 22/11: nessuna modifica.
