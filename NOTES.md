@@ -103,3 +103,9 @@ Note:
 2. Messaggio WARNING cosmetico: "before port off" anche dal controllo periodico.
 3. Riassunto di 2-3 giorni di zuk_current_log.csv per giudicare il margine energetico, senza cambiare le soglie.
 4. Ultima verifica a freddo (stop servizio e riavvio) solo se si cambia codice. Ultimi 2 giorni prima del 22/11: nessuna modifica.
+
+## Aggiornamento sessione 07/11 sera
+- Chiusi: fix sys.usb.state vuoto o lettura ADB fallita (328b237): _ensure_usb_adb_only ora restituisce None (sconosciuto), non lancia svc usb setFunction e _maintain_usb_adb_only non lo conta come fallimento. WARNING reso neutro. 88 test pytest verdi, ruff e mypy puliti. Servizio riavviato col codice nuovo alle 16:38, ADB rientrato in circa 16 s da solo.
+- Non provato dal vivo: il ramo "USB state unreadable; adb-only check skipped" (coperto solo dai test).
+- Aperto: punto C, margine energetico. Guardare zuk_current_log.csv dopo 2-3 giorni (9-10/11) senza cambiare le soglie.
+- Calendario: ultimi 2 giorni prima del 22/11 nessuna modifica. Se non emergono altri problemi, dopo il riepilogo energetico si congela il codice.
