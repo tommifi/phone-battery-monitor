@@ -109,3 +109,4 @@ Note:
 - Non provato dal vivo: il ramo "USB state unreadable; adb-only check skipped" (coperto solo dai test).
 - Aperto: punto C, margine energetico. Guardare zuk_current_log.csv dopo 2-3 giorni (9-10/11) senza cambiare le soglie.
 - Calendario: ultimi 2 giorni prima del 22/11 nessuna modifica. Se non emergono altri problemi, dopo il riepilogo energetico si congela il codice.
+- 07/11 sera: scrcpy dava "Multiple (2) ADB devices" per il doppio device (USB + Wi-Fi) dopo il cavo con dati. Fix fuori dal repo: /usr/local/share/applications/scrcpy.desktop ora usa scrcpy -s 192.168.100.115:5555 (backup .bak nella stessa cartella; Pi-Apps puo riscriverlo). Da terminale: scrcpy -e. Il messaggio "adb reverse failed" e innocuo (fallback su adb forward). Il device USB non va rimosso: serve al recupero ADB Wi-Fi.
