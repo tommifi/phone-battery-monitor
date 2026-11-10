@@ -42,7 +42,7 @@ Costanti principali: CHARGE_STOP_LEVEL 80, CHARGE_RESUME_LEVEL 40, CRITICAL_LEVE
 6. Il recupero automatico di ADB Wi-Fi dopo un reboot (_restore_wifi_adb via USB + adb tcpip) funziona end to end: dopo reboot normale circa 7 minuti con monitor cieco. atx-agent e uiautomator sono ripartiti da soli (verificato una volta).
 7. Cavi: i due cavi con dati danno circa 0,45-0,47 A a 4,92-4,97 V (porta dati standard, Max charging current 500000, USB powered true). Il cavo spesso senza dati da 1,64 A a 4,51 V (AC powered true, 1500000), ma il Pi non vede il telefono: niente ADB via USB, niente recupero con tcpip. Ora e collegato un cavo CON dati.
 8. Il Charge counter (microAh) dumpsys battery e una misura diretta affidabile della corrente.
-9. Il Pi ha un RTC e orologio sincronizzato: gli orari dei log sono affidabili. I riavvii del 28/10 mattina li aveva ordinati Tommaso.
+9. Il Pi ha rtc0 ma a Pi spento NON tiene l'ora (8/11: dopo ~80 min di spegnimento il boot parte con orologio indietro, timesyncd sincronizza dopo la rete, log e CSV con orari sbagliati fino ad allora). Il monitor usa time.monotonic, non e toccato. I riavvii del 28/10 mattina li aveva ordinati Tommaso.
 10. healthd (processo di sistema del telefono) consuma CPU in modo crescente con l'uptime del telefono (0,1% dopo reboot, 18% a 42 h, 69% a 91 h) ma era gia costante prima del guasto del 1/11: non dimostrato come causa.
 
 ## Problemi aperti
