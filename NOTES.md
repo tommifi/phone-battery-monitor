@@ -125,3 +125,11 @@ Non decisi (da affrontare al ritorno o in un'altra sessione):
 - Allarme Telegram per livello basso con porta accesa (non esiste).
 - UPS del Pi da controllare o sostituire; alimentatore e cavo del Pi da verificare.
 Calendario: da oggi nessuna modifica. Sera del 21/11: comando di riepilogo (n. 39) e controllo di servizi e livello.
+
+## Patch UPS del Pi (20/11 ore 11:59, fuori dal repo)
+- Script: ~/.local/bin/x1205-ups.py (servizio di sistema x1205-ups.service, scheda ipotizzata Suptronics X120X). Copia di riferimento in ups/x1205-ups.py. Backup originale: ~/.local/bin/x1205-ups.py.bak-20261120.
+- Problema: riga 381, tensione cella < 3,2 V era condizione critica anche con rete presente. Dopo 3 cicli critici il ramo finale loggava "Initiating shutdown" (la chiamata di spegnimento non l'ho vista nel codice incollato).
+- Patch: riga 381 ora richiede ac_power_state == 0. Con rete presente e cella morta il Pi resta acceso. Servizio riavviato alle 11:59:16, ripartito senza errori.
+- Cella UPS: ferma a 0,1%, tensione in calo 3,544 V (18/11) -> 3,377 V (20/11 11:59), nonostante charging=enabled e ac=ok. Causa non verificata (cella morta, contatto, ricarica non effettiva). LED di carica non ancora controllato.
+- Non noto: cosa fa la scheda se la cella scende molto sotto 3,2 V con rete presente (potrebbe tagliare i 5 V). Con blackout il Pi cade comunque.
+- Da rivedere al ritorno: cella UPS, alimentatore e cavo del Pi (sottotensioni 06:28 del 20/11).
