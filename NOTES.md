@@ -110,3 +110,18 @@ Note:
 - Aperto: punto C, margine energetico. Guardare zuk_current_log.csv dopo 2-3 giorni (9-10/11) senza cambiare le soglie.
 - Calendario: ultimi 2 giorni prima del 22/11 nessuna modifica. Se non emergono altri problemi, dopo il riepilogo energetico si congela il codice.
 - 07/11 sera: scrcpy dava "Multiple (2) ADB devices" per il doppio device (USB + Wi-Fi) dopo il cavo con dati. Fix fuori dal repo: /usr/local/share/applications/scrcpy.desktop ora usa scrcpy -s 192.168.100.115:5555 (backup .bak nella stessa cartella; Pi-Apps puo riscriverlo). Da terminale: scrcpy -e. Il messaggio "adb reverse failed" e innocuo (fallback su adb forward). Il device USB non va rimosso: serve al recupero ADB Wi-Fi.
+
+## Aggiornamento sessione 20/11 (ultima prima della partenza)
+Fatti:
+- Reboot telefono di prova 20/11 10:52:40 (porta spenta, livello 78->53%): ADB Wi-Fi e USB rientrati, sys.usb.state corretto a adb alle 10:56:52 (circa 4 min). Fail-safe alle 10:53:31 ("level unknown, switching port on") ha riacceso la porta spenta dallo stop a 80%: previsto, nessun Power loss. Caso "porta spenta con mtp,adb" NON esercitato.
+- Dal 17/11 pacchetti Android disattivati (com.zui.homesettings, com.zui.safecenter, com.google.android.gsf, sina.mobile.tianqitong): il reboot di prova non ha mostrato problemi.
+- Il 16-17/11 il telefono e sceso a 0% (3159 mV) con schermo acceso, stay_on_while_plugged_in=7 e Instagram 431: ingresso del cavo circa 500 mA, consumo 600-700 mA. Dopo il lavoro su Android il bilancio e tornato positivo (39% -> 80% in circa 5,5 h il 17/11). Ricarica d'emergenza con caricatore da muro il 17/11.
+- Due boot del Pi il 19/11 (14:17 e 19:56): spegnimenti ordinati (systemd-shutdown nel journal).
+- vcgencmd get_throttled = 0x50000 (sticky): due "Undervoltage detected" del kernel il 20/11 alle 06:28:48 e 06:29:09, poi nessuno. A quell'ora girava MarketScraper; causa non verificata.
+- UPS del Pi (log nel journal, PID 2288): batteria ferma a 0,1% con tensione in calo lento (3,394 -> 3,379 V tra 06:27 e 11:37) nonostante charging=enabled e ac=ok: NON si ricarica, nessuna protezione da blackout. Ingresso 5,0 V a 3 W; a 6,4 W scende a 4,84 V. Cause ipotizzate (batteria UPS morta o bloccata, alimentatore/cavo al limite), non verificate.
+- adb devices a volte elenca solo il Wi-Fi e non il device USB 4a64b8f0, anche se kernel e uhubctl lo vedono; rientrato da solo, causa ignota.
+Non decisi (da affrontare al ritorno o in un'altra sessione):
+- stay_on_while_plugged_in=7 (tocca il bot, altra chat).
+- Allarme Telegram per livello basso con porta accesa (non esiste).
+- UPS del Pi da controllare o sostituire; alimentatore e cavo del Pi da verificare.
+Calendario: da oggi nessuna modifica. Sera del 21/11: comando di riepilogo (n. 39) e controllo di servizi e livello.
